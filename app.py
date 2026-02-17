@@ -2,114 +2,170 @@ from flask import Flask, render_template_string, request
 import yfinance as yf
 from datetime import datetime, timedelta
 import os
+import time
 
 app = Flask(__name__)
 
+# Configure yfinance with user agent to avoid rate limiting
+yf.pdr_override()
+
 def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter_type='both'):
-    stock = yf.Ticker(ticker)
-    hist = stock.history(period="1d")
-    if hist.empty:
-        return None, "No price data found"
+    """Fetch options data with retry logic"""
     
-    price = float(hist['Close'].iloc[-1])
-    expirations = stock.options
-    if not expirations:
-        return None, "No options available"
+    # Retry logic for yfinance
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            stock = yf.Ticker(ticker)
+            
+            # Try to get history with timeout
+            hist = stock.history(period="1d")
+            
+            if hist.empty:
+                if attempt < max_retries - 1:
+                    time.sleep(1)  # Wait before retry
+                    continue
+                return None, f"No price data found for {ticker}. Please try another symbol."
+            
+            price = float(hist['Close'].iloc[-1])
+            
+            # Get options expiration dates
+            try:
+                expirations = stock.options
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                return None, f"No options available for {ticker}. It may not have listed options."
+            
+            if not expirations:
+                return None, f"No options available for {ticker}"
+            
+            break  # Success, exit retry loop
+            
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            return None, f"Error fetching data for {ticker}: {str(e)[:100]}"
     
     all_options = []
     today = datetime.now()
     limit = today + timedelta(days=90)
     
+    # Process options chains
     for exp_str in expirations[:15]:
-        exp_date = datetime.strptime(exp_str, "%Y-%m-%d")
-        if exp_date > limit:
-            continue
-        
         try:
-            chain = stock.option_chain(exp_str)
+            exp_date = datetime.strptime(exp_str, "%Y-%m-%d")
+            if exp_date > limit:
+                continue
+            
+            # Fetch options chain with error handling
+            try:
+                chain = stock.option_chain(exp_str)
+            except Exception as e:
+                print(f"Error fetching chain for {exp_str}: {e}")
+                continue
+            
             days_to_exp = (exp_date - today).days
             
-            if filter_type in ['both', 'calls']:
-                for _, row in chain.calls.iterrows():
-                    try:
-                        strike = float(row['strike'])
-                        if strike <= price:
-                            continue
-                        
-                        bid = float(row.get('bid', 0)) if row.get('bid') is not None else 0
-                        ask = float(row.get('ask', 0)) if row.get('ask') is not None else 0
-                        premium = (bid + ask) / 2
-                        
-                        if premium < 0.05:
-                            continue
-                        
-                        moneyness = abs((strike - price) / price)
-                        time_factor = days_to_exp / 365
-                        delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
-                        
-                        if delta > max_delta_calls:
-                            continue
-                        
-                        annual_return = (premium / price) * (365 / days_to_exp) * 100
-                        
-                        all_options.append({
-                            'type': 'Call',
-                            'strike': strike,
-                            'expiration': exp_date.strftime('%b %d, %Y'),
-                            'days': days_to_exp,
-                            'premium': premium,
-                            'bid': bid,
-                            'ask': ask,
-                            'delta': delta,
-                            'annual_return': annual_return,
-                            'volume': int(row.get('volume', 0)) if row.get('volume') is not None else 0,
-                            'oi': int(row.get('openInterest', 0)) if row.get('openInterest') is not None else 0
-                        })
-                    except:
-                        pass
+            if days_to_exp <= 0:
+                continue
             
+            # Process calls
+            if filter_type in ['both', 'calls']:
+                try:
+                    for _, row in chain.calls.iterrows():
+                        try:
+                            strike = float(row['strike'])
+                            if strike <= price:
+                                continue
+                            
+                            bid = float(row.get('bid', 0)) if row.get('bid') is not None else 0
+                            ask = float(row.get('ask', 0)) if row.get('ask') is not None else 0
+                            premium = (bid + ask) / 2
+                            
+                            if premium < 0.05:
+                                continue
+                            
+                            moneyness = abs((strike - price) / price)
+                            time_factor = days_to_exp / 365
+                            delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
+                            
+                            if delta > max_delta_calls:
+                                continue
+                            
+                            annual_return = (premium / price) * (365 / days_to_exp) * 100
+                            
+                            all_options.append({
+                                'type': 'Call',
+                                'strike': strike,
+                                'expiration': exp_date.strftime('%b %d, %Y'),
+                                'days': days_to_exp,
+                                'premium': premium,
+                                'bid': bid,
+                                'ask': ask,
+                                'delta': delta,
+                                'annual_return': annual_return,
+                                'volume': int(row.get('volume', 0)) if row.get('volume') is not None else 0,
+                                'oi': int(row.get('openInterest', 0)) if row.get('openInterest') is not None else 0
+                            })
+                        except Exception as e:
+                            continue
+                except Exception as e:
+                    print(f"Error processing calls: {e}")
+            
+            # Process puts
             if filter_type in ['both', 'puts']:
-                for _, row in chain.puts.iterrows():
-                    try:
-                        strike = float(row['strike'])
-                        if strike >= price:
+                try:
+                    for _, row in chain.puts.iterrows():
+                        try:
+                            strike = float(row['strike'])
+                            if strike >= price:
+                                continue
+                            
+                            bid = float(row.get('bid', 0)) if row.get('bid') is not None else 0
+                            ask = float(row.get('ask', 0)) if row.get('ask') is not None else 0
+                            premium = (bid + ask) / 2
+                            
+                            if premium < 0.05:
+                                continue
+                            
+                            moneyness = abs((strike - price) / price)
+                            time_factor = days_to_exp / 365
+                            delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
+                            
+                            if delta > max_delta_puts:
+                                continue
+                            
+                            annual_return = (premium / price) * (365 / days_to_exp) * 100
+                            
+                            all_options.append({
+                                'type': 'Put',
+                                'strike': strike,
+                                'expiration': exp_date.strftime('%b %d, %Y'),
+                                'days': days_to_exp,
+                                'premium': premium,
+                                'bid': bid,
+                                'ask': ask,
+                                'delta': delta,
+                                'annual_return': annual_return,
+                                'volume': int(row.get('volume', 0)) if row.get('volume') is not None else 0,
+                                'oi': int(row.get('openInterest', 0)) if row.get('openInterest') is not None else 0
+                            })
+                        except Exception as e:
                             continue
-                        
-                        bid = float(row.get('bid', 0)) if row.get('bid') is not None else 0
-                        ask = float(row.get('ask', 0)) if row.get('ask') is not None else 0
-                        premium = (bid + ask) / 2
-                        
-                        if premium < 0.05:
-                            continue
-                        
-                        moneyness = abs((strike - price) / price)
-                        time_factor = days_to_exp / 365
-                        delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
-                        
-                        if delta > max_delta_puts:
-                            continue
-                        
-                        annual_return = (premium / price) * (365 / days_to_exp) * 100
-                        
-                        all_options.append({
-                            'type': 'Put',
-                            'strike': strike,
-                            'expiration': exp_date.strftime('%b %d, %Y'),
-                            'days': days_to_exp,
-                            'premium': premium,
-                            'bid': bid,
-                            'ask': ask,
-                            'delta': delta,
-                            'annual_return': annual_return,
-                            'volume': int(row.get('volume', 0)) if row.get('volume') is not None else 0,
-                            'oi': int(row.get('openInterest', 0)) if row.get('openInterest') is not None else 0
-                        })
-                    except:
-                        pass
-        except:
-            pass
+                except Exception as e:
+                    print(f"Error processing puts: {e}")
+                    
+        except Exception as e:
+            print(f"Error processing expiration {exp_str}: {e}")
+            continue
     
     all_options.sort(key=lambda x: x['annual_return'], reverse=True)
+    
+    if len(all_options) == 0:
+        return None, f"No options found matching your criteria for {ticker}. Try adjusting the delta filters or choose a different symbol."
     
     return {
         'symbol': ticker,
