@@ -3,57 +3,80 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import os
 import time
+import requests
 
 app = Flask(__name__)
 
-# Configure yfinance with user agent to avoid rate limiting
-yf.pdr_override()
+# Configure requests session with proper headers to avoid blocking
+def create_yf_session():
+    """Create a requests session with proper headers"""
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+    })
+    return session
 
 def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter_type='both'):
-    """Fetch options data with retry logic"""
+    """Fetch options data with retry logic and proper headers"""
+    
+    # Create session with proper headers
+    session = create_yf_session()
     
     # Retry logic for yfinance
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            stock = yf.Ticker(ticker)
+            # Create ticker with custom session
+            stock = yf.Ticker(ticker, session=session)
             
             # Try to get history with timeout
-            hist = stock.history(period="1d")
+            hist = stock.history(period="5d")  # Get more days in case of holidays
             
             if hist.empty:
                 if attempt < max_retries - 1:
-                    time.sleep(1)  # Wait before retry
+                    print(f"Retry {attempt + 1} for {ticker} - empty history")
+                    time.sleep(2)  # Wait longer before retry
                     continue
-                return None, f"No price data found for {ticker}. Please try another symbol."
+                return None, f"No price data found for {ticker}. The symbol may be invalid or the market may be closed."
             
+            # Get the most recent price
             price = float(hist['Close'].iloc[-1])
+            print(f"Got price for {ticker}: ${price}")
             
             # Get options expiration dates
             try:
                 expirations = stock.options
+                print(f"Got {len(expirations)} expirations for {ticker}")
             except Exception as e:
                 if attempt < max_retries - 1:
-                    time.sleep(1)
+                    print(f"Retry {attempt + 1} for {ticker} - error getting expirations: {e}")
+                    time.sleep(2)
                     continue
-                return None, f"No options available for {ticker}. It may not have listed options."
+                return None, f"No options available for {ticker}. This stock may not have listed options."
             
-            if not expirations:
+            if not expirations or len(expirations) == 0:
                 return None, f"No options available for {ticker}"
             
             break  # Success, exit retry loop
             
         except Exception as e:
+            print(f"Error on attempt {attempt + 1} for {ticker}: {str(e)}")
             if attempt < max_retries - 1:
-                time.sleep(1)
+                time.sleep(2)
                 continue
-            return None, f"Error fetching data for {ticker}: {str(e)[:100]}"
+            return None, f"Error fetching data for {ticker}. Yahoo Finance may be temporarily unavailable. Please try again in a moment."
     
     all_options = []
     today = datetime.now()
     limit = today + timedelta(days=90)
     
     # Process options chains
+    processed_count = 0
     for exp_str in expirations[:15]:
         try:
             exp_date = datetime.strptime(exp_str, "%Y-%m-%d")
@@ -63,6 +86,8 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
             # Fetch options chain with error handling
             try:
                 chain = stock.option_chain(exp_str)
+                processed_count += 1
+                print(f"Processing chain {processed_count} for {exp_str}")
             except Exception as e:
                 print(f"Error fetching chain for {exp_str}: {e}")
                 continue
@@ -164,8 +189,10 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
     
     all_options.sort(key=lambda x: x['annual_return'], reverse=True)
     
+    print(f"Total options found: {len(all_options)}")
+    
     if len(all_options) == 0:
-        return None, f"No options found matching your criteria for {ticker}. Try adjusting the delta filters or choose a different symbol."
+        return None, f"No options found matching your criteria for {ticker}. Try adjusting the delta filters (current: calls ≤{max_delta_calls:.2f}, puts ≤{max_delta_puts:.2f})."
     
     return {
         'symbol': ticker,
@@ -508,3 +535,4 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
