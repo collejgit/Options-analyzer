@@ -1,210 +1,225 @@
 from flask import Flask, render_template_string, request
-import yfinance as yf
 from datetime import datetime, timedelta
 import os
 import time
 import requests
+from functools import lru_cache
 
 app = Flask(__name__)
 
-# Configure requests session with proper headers to avoid blocking
-def create_yf_session():
-    """Create a requests session with proper headers"""
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
-    })
-    return session
+# Get API key from environment variable
+POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '')
+
+# Cache for reducing API calls
+cache = {}
+CACHE_DURATION = 300  # 5 minutes
+
+def fetch_stock_price(ticker):
+    """Fetch current stock price from Polygon.io"""
+    url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/prev?adjusted=true&apiKey={POLYGON_API_KEY}"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code != 200:
+            return None, f"Error fetching price: {response.status_code}"
+        
+        data = response.json()
+        if data.get('results') and len(data['results']) > 0:
+            price = float(data['results'][0]['c'])  # closing price
+            return price, None
+        return None, "No price data available"
+    except Exception as e:
+        return None, f"Error: {str(e)}"
+
+def fetch_options_chain(ticker):
+    """Fetch options chain from Polygon.io"""
+    url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=250&apiKey={POLYGON_API_KEY}"
+    
+    try:
+        response = requests.get(url, timeout=15)
+        if response.status_code != 200:
+            return None, f"Error fetching options: {response.status_code}"
+        
+        data = response.json()
+        return data.get('results', []), None
+    except Exception as e:
+        return None, f"Error: {str(e)}"
 
 def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter_type='both'):
-    """Fetch options data with retry logic and proper headers"""
+    """Fetch and process options data from Polygon.io"""
     
-    # Create session with proper headers
-    session = create_yf_session()
+    ticker = ticker.upper()
     
-    # Retry logic for yfinance
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # Create ticker with custom session
-            stock = yf.Ticker(ticker, session=session)
-            
-            # Try to get history with timeout
-            hist = stock.history(period="5d")  # Get more days in case of holidays
-            
-            if hist.empty:
-                if attempt < max_retries - 1:
-                    print(f"Retry {attempt + 1} for {ticker} - empty history")
-                    time.sleep(2)  # Wait longer before retry
-                    continue
-                return None, f"No price data found for {ticker}. The symbol may be invalid or the market may be closed."
-            
-            # Get the most recent price
-            price = float(hist['Close'].iloc[-1])
-            print(f"Got price for {ticker}: ${price}")
-            
-            # Get options expiration dates
-            try:
-                expirations = stock.options
-                print(f"Got {len(expirations)} expirations for {ticker}")
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    print(f"Retry {attempt + 1} for {ticker} - error getting expirations: {e}")
-                    time.sleep(2)
-                    continue
-                return None, f"No options available for {ticker}. This stock may not have listed options."
-            
-            if not expirations or len(expirations) == 0:
-                return None, f"No options available for {ticker}"
-            
-            break  # Success, exit retry loop
-            
-        except Exception as e:
-            print(f"Error on attempt {attempt + 1} for {ticker}: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            return None, f"Error fetching data for {ticker}. Yahoo Finance may be temporarily unavailable. Please try again in a moment."
+    # Check cache first
+    current_time = time.time()
+    cache_key = f"{ticker}_{max_delta_calls}_{max_delta_puts}_{filter_type}"
     
+    if ticker in cache:
+        cached_data, cached_time = cache[ticker]
+        if current_time - cached_time < CACHE_DURATION:
+            print(f"Using cached data for {ticker}")
+            return filter_cached_data(cached_data, max_delta_calls, max_delta_puts, filter_type)
+    
+    if not POLYGON_API_KEY:
+        return None, "API key not configured. Please add POLYGON_API_KEY environment variable in Render dashboard."
+    
+    print(f"Fetching fresh data for {ticker}")
+    
+    # Fetch stock price
+    price, error = fetch_stock_price(ticker)
+    if error:
+        return None, f"Could not fetch price for {ticker}: {error}"
+    
+    print(f"Price for {ticker}: ${price}")
+    
+    # Small delay between API calls
+    time.sleep(0.5)
+    
+    # Fetch options chain
+    options_data, error = fetch_options_chain(ticker)
+    if error:
+        return None, f"Could not fetch options for {ticker}: {error}"
+    
+    if not options_data:
+        return None, f"No options data available for {ticker}"
+    
+    print(f"Received {len(options_data)} options contracts")
+    
+    # Process options
     all_options = []
     today = datetime.now()
-    limit = today + timedelta(days=90)
     
-    # Process options chains
-    processed_count = 0
-    for exp_str in expirations[:15]:
+    for option in options_data:
         try:
-            exp_date = datetime.strptime(exp_str, "%Y-%m-%d")
-            if exp_date > limit:
+            details = option.get('details', {})
+            greeks = option.get('greeks', {})
+            last_quote = option.get('last_quote', {})
+            
+            contract_type = details.get('contract_type')
+            strike = details.get('strike_price')
+            expiration_str = details.get('expiration_date')
+            
+            if not all([contract_type, strike, expiration_str]):
                 continue
             
-            # Fetch options chain with error handling
+            # Parse expiration
             try:
-                chain = stock.option_chain(exp_str)
-                processed_count += 1
-                print(f"Processing chain {processed_count} for {exp_str}")
-            except Exception as e:
-                print(f"Error fetching chain for {exp_str}: {e}")
+                exp_date = datetime.strptime(expiration_str, "%Y-%m-%d")
+            except:
                 continue
             
             days_to_exp = (exp_date - today).days
-            
-            if days_to_exp <= 0:
+            if days_to_exp <= 0 or days_to_exp > 90:
                 continue
             
-            # Process calls
-            if filter_type in ['both', 'calls']:
-                try:
-                    for _, row in chain.calls.iterrows():
-                        try:
-                            strike = float(row['strike'])
-                            if strike <= price:
-                                continue
-                            
-                            bid = float(row.get('bid', 0)) if row.get('bid') is not None else 0
-                            ask = float(row.get('ask', 0)) if row.get('ask') is not None else 0
-                            premium = (bid + ask) / 2
-                            
-                            if premium < 0.05:
-                                continue
-                            
-                            moneyness = abs((strike - price) / price)
-                            time_factor = days_to_exp / 365
-                            delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
-                            
-                            if delta > max_delta_calls:
-                                continue
-                            
-                            annual_return = (premium / price) * (365 / days_to_exp) * 100
-                            
-                            all_options.append({
-                                'type': 'Call',
-                                'strike': strike,
-                                'expiration': exp_date.strftime('%b %d, %Y'),
-                                'days': days_to_exp,
-                                'premium': premium,
-                                'bid': bid,
-                                'ask': ask,
-                                'delta': delta,
-                                'annual_return': annual_return,
-                                'volume': int(row.get('volume', 0)) if row.get('volume') is not None else 0,
-                                'oi': int(row.get('openInterest', 0)) if row.get('openInterest') is not None else 0
-                            })
-                        except Exception as e:
-                            continue
-                except Exception as e:
-                    print(f"Error processing calls: {e}")
+            # Filter by option type
+            if contract_type == 'call' and filter_type == 'puts':
+                continue
+            if contract_type == 'put' and filter_type == 'calls':
+                continue
             
-            # Process puts
-            if filter_type in ['both', 'puts']:
-                try:
-                    for _, row in chain.puts.iterrows():
-                        try:
-                            strike = float(row['strike'])
-                            if strike >= price:
-                                continue
-                            
-                            bid = float(row.get('bid', 0)) if row.get('bid') is not None else 0
-                            ask = float(row.get('ask', 0)) if row.get('ask') is not None else 0
-                            premium = (bid + ask) / 2
-                            
-                            if premium < 0.05:
-                                continue
-                            
-                            moneyness = abs((strike - price) / price)
-                            time_factor = days_to_exp / 365
-                            delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
-                            
-                            if delta > max_delta_puts:
-                                continue
-                            
-                            annual_return = (premium / price) * (365 / days_to_exp) * 100
-                            
-                            all_options.append({
-                                'type': 'Put',
-                                'strike': strike,
-                                'expiration': exp_date.strftime('%b %d, %Y'),
-                                'days': days_to_exp,
-                                'premium': premium,
-                                'bid': bid,
-                                'ask': ask,
-                                'delta': delta,
-                                'annual_return': annual_return,
-                                'volume': int(row.get('volume', 0)) if row.get('volume') is not None else 0,
-                                'oi': int(row.get('openInterest', 0)) if row.get('openInterest') is not None else 0
-                            })
-                        except Exception as e:
-                            continue
-                except Exception as e:
-                    print(f"Error processing puts: {e}")
-                    
+            # Filter by moneyness
+            if contract_type == 'call' and strike <= price:
+                continue
+            if contract_type == 'put' and strike >= price:
+                continue
+            
+            # Get pricing data
+            bid = last_quote.get('bid', 0) or 0
+            ask = last_quote.get('ask', 0) or 0
+            premium = (bid + ask) / 2
+            
+            if premium < 0.05:
+                continue
+            
+            # Get or estimate delta
+            delta = greeks.get('delta', 0)
+            if delta == 0 or delta is None:
+                # Estimate delta if not provided
+                moneyness = abs((strike - price) / price)
+                time_factor = days_to_exp / 365
+                delta = min(0.5, 1.0 / (1.0 + moneyness * 10 / (time_factor ** 0.5)))
+            else:
+                delta = abs(float(delta))
+            
+            # Filter by delta
+            if contract_type == 'call' and delta > max_delta_calls:
+                continue
+            if contract_type == 'put' and delta > max_delta_puts:
+                continue
+            
+            # Calculate annualized return
+            annual_return = (premium / price) * (365 / days_to_exp) * 100
+            
+            all_options.append({
+                'type': 'Call' if contract_type == 'call' else 'Put',
+                'strike': float(strike),
+                'expiration': exp_date.strftime('%b %d, %Y'),
+                'days': days_to_exp,
+                'premium': premium,
+                'bid': bid,
+                'ask': ask,
+                'delta': delta,
+                'annual_return': annual_return,
+                'volume': option.get('day', {}).get('volume', 0) or 0,
+                'oi': option.get('open_interest', 0) or 0
+            })
+            
         except Exception as e:
-            print(f"Error processing expiration {exp_str}: {e}")
+            print(f"Error processing option: {e}")
             continue
     
+    # Sort by annual return
     all_options.sort(key=lambda x: x['annual_return'], reverse=True)
     
-    print(f"Total options found: {len(all_options)}")
-    
-    if len(all_options) == 0:
-        return None, f"No options found matching your criteria for {ticker}. Try adjusting the delta filters (current: calls ≤{max_delta_calls:.2f}, puts ≤{max_delta_puts:.2f})."
-    
-    return {
+    result = {
         'symbol': ticker,
         'price': price,
         'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'options': all_options[:30],
         'max_delta_calls': max_delta_calls,
         'max_delta_puts': max_delta_puts,
-        'filter_type': filter_type
-    }, None
+        'filter_type': filter_type,
+        'all_options': all_options
+    }
+    
+    # Cache the result
+    cache[ticker] = (result, current_time)
+    
+    if len(all_options) == 0:
+        return None, f"No options found for {ticker} matching delta â¤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts). Try increasing the delta filters."
+    
+    print(f"Found {len(all_options)} matching options for {ticker}")
+    return result, None
 
-# HTML template - same as before
+def filter_cached_data(cached_result, max_delta_calls, max_delta_puts, filter_type):
+    """Filter cached data with new parameters"""
+    all_opts = cached_result.get('all_options', [])
+    
+    filtered = []
+    for opt in all_opts:
+        if opt['type'] == 'Call':
+            if filter_type in ['both', 'calls'] and opt['delta'] <= max_delta_calls:
+                filtered.append(opt)
+        else:
+            if filter_type in ['both', 'puts'] and opt['delta'] <= max_delta_puts:
+                filtered.append(opt)
+    
+    filtered.sort(key=lambda x: x['annual_return'], reverse=True)
+    
+    result = cached_result.copy()
+    result['options'] = filtered[:30]
+    result['max_delta_calls'] = max_delta_calls
+    result['max_delta_puts'] = max_delta_puts
+    result['filter_type'] = filter_type
+    result['timestamp'] = cached_result['timestamp'] + " (cached)"
+    
+    if len(filtered) == 0:
+        return None, f"No options match delta â¤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts)"
+    
+    return result, None
+
+# HTML template (same as before)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -405,9 +420,9 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 Options Strategy Analyzer</h1>
+            <h1>ð Options Strategy Analyzer</h1>
             <div class="price">{{ symbol }}: ${{ "%.2f"|format(price) }}</div>
-            <p style="color: #94a3b8; margin: 5px 0 0 0;">{{ timestamp }}</p>
+            <p style="color: #94a3b8; margin: 5px 0 0 0;">{{ timestamp }} â¢ Powered by Polygon.io</p>
         </div>
 
         <div class="controls">
@@ -459,7 +474,7 @@ HTML_TEMPLATE = """
 
         {% if error %}
         <div class="card" style="background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.5);">
-            <p>❌ Error: {{ error }}</p>
+            <p>â Error: {{ error }}</p>
         </div>
         {% else %}
         <h2 style="margin: 30px 0 20px 0;">Top Income Opportunities</h2>
@@ -484,7 +499,7 @@ HTML_TEMPLATE = """
                     <span class="metric-value">${{ "%.2f"|format(opt.bid) }} / ${{ "%.2f"|format(opt.ask) }}</span>
                 </div>
                 <div class="metric">
-                    <span class="metric-label">Delta (est.)</span>
+                    <span class="metric-label">Delta</span>
                     <span class="metric-value">{{ "%.3f"|format(opt.delta) }}</span>
                 </div>
                 <div class="metric">
@@ -501,7 +516,7 @@ HTML_TEMPLATE = """
         {% endif %}
 
         <div class="timestamp">
-            💡 Tip: Adjust delta sliders and filters above, then bookmark your custom view
+            ð¡ Data cached for 5 minutes â¢ Updates refresh automatically
         </div>
     </div>
 </body>
@@ -515,7 +530,7 @@ def home():
     delta_puts = float(request.args.get('delta_puts', 0.18))
     filter_type = request.args.get('filter', 'both')
     
-    print(f"Request: {symbol} (Calls Δ≤{delta_calls}, Puts Δ≤{delta_puts}, Filter: {filter_type})")
+    print(f"Request: {symbol} (Calls Îâ¤{delta_calls}, Puts Îâ¤{delta_puts}, Filter: {filter_type})")
     
     data, error = fetch_options_data(symbol, delta_calls, delta_puts, filter_type)
     
@@ -535,4 +550,5 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
+
 
