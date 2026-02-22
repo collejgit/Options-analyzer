@@ -3,15 +3,11 @@ from datetime import datetime, timedelta
 import os
 import time
 import requests
-from functools import lru_cache
 
 app = Flask(__name__)
 
 # Get API key from environment variable
 POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '')
-
-# No cache - always fetch fresh data
-# (Polygon.io has high rate limits on paid plans)
 
 def fetch_stock_price(ticker):
     """Fetch current stock price from Polygon.io"""
@@ -65,16 +61,6 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
     """Fetch and process options data from Polygon.io"""
     
     ticker = ticker.upper()
-    
-    # Check cache first
-    current_time = time.time()
-    cache_key = f"{ticker}_{max_delta_calls}_{max_delta_puts}_{filter_type}"
-    
-    if ticker in cache:
-        cached_data, cached_time = cache[ticker]
-        if current_time - cached_time < CACHE_DURATION:
-            print(f"Using cached data for {ticker}")
-            return filter_cached_data(cached_data, max_delta_calls, max_delta_puts, filter_type)
     
     if not POLYGON_API_KEY:
         return None, "API key not configured. Please add POLYGON_API_KEY environment variable in Render dashboard."
@@ -242,40 +228,10 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
         'all_options': all_options
     }
     
-    # Cache the result
-    cache[ticker] = (result, current_time)
-    
     if len(all_options) == 0:
         return None, f"No options found for {ticker} matching delta ≤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts). Try increasing the delta filters."
     
     print(f"Found {len(all_options)} matching options for {ticker}")
-    return result, None
-
-def filter_cached_data(cached_result, max_delta_calls, max_delta_puts, filter_type):
-    """Filter cached data with new parameters"""
-    all_opts = cached_result.get('all_options', [])
-    
-    filtered = []
-    for opt in all_opts:
-        if opt['type'] == 'Call':
-            if filter_type in ['both', 'calls'] and opt['delta'] <= max_delta_calls:
-                filtered.append(opt)
-        else:
-            if filter_type in ['both', 'puts'] and opt['delta'] <= max_delta_puts:
-                filtered.append(opt)
-    
-    filtered.sort(key=lambda x: x['annual_return'], reverse=True)
-    
-    result = cached_result.copy()
-    result['options'] = filtered[:30]
-    result['max_delta_calls'] = max_delta_calls
-    result['max_delta_puts'] = max_delta_puts
-    result['filter_type'] = filter_type
-    result['timestamp'] = cached_result['timestamp'] + " (cached)"
-    
-    if len(filtered) == 0:
-        return None, f"No options match delta ≤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts)"
-    
     return result, None
 
 # HTML template (same as before)
@@ -575,7 +531,7 @@ HTML_TEMPLATE = """
         {% endif %}
 
         <div class="timestamp">
-            💡 Data cached for 5 minutes • Updates refresh automatically
+            💡 Real-time data from Polygon.io • Refreshes on every request
         </div>
     </div>
 </body>
