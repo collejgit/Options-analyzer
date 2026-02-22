@@ -155,10 +155,22 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
                 skipped_reasons['wrong_moneyness'] += 1
                 continue
             
-            # Get pricing data
-            bid = last_quote.get('bid', 0) or 0
-            ask = last_quote.get('ask', 0) or 0
-            premium = (bid + ask) / 2
+            # Get pricing data from 'day' field (not 'last_quote' for production API)
+            day_data = option.get('day', {})
+            
+            # Try to get bid/ask, fallback to close price
+            bid = day_data.get('low', 0) or 0  # Use low as proxy for bid
+            ask = day_data.get('high', 0) or 0  # Use high as proxy for ask
+            close = day_data.get('close', 0) or 0
+            
+            # If no bid/ask, use close
+            if bid == 0 and ask == 0 and close > 0:
+                premium = close
+            else:
+                premium = (bid + ask) / 2 if (bid > 0 and ask > 0) else close
+            
+            if idx < 5:
+                print(f"Pricing: bid={bid}, ask={ask}, close={close}, premium={premium}")
             
             if premium < 0.05:
                 skipped_reasons['low_premium'] += 1
