@@ -36,13 +36,30 @@ def fetch_options_chain(ticker):
     url = f"https://api.polygon.io/v3/snapshot/options/{ticker}?limit=250&apiKey={POLYGON_API_KEY}"
     
     try:
+        print(f"Fetching options from: {url[:80]}...")  # Don't log full URL with API key
         response = requests.get(url, timeout=15)
+        print(f"Response status: {response.status_code}")
+        
         if response.status_code != 200:
-            return None, f"Error fetching options: {response.status_code}"
+            print(f"Error response: {response.text[:200]}")
+            return None, f"Error fetching options: {response.status_code} - {response.text[:100]}"
         
         data = response.json()
-        return data.get('results', []), None
+        print(f"Response keys: {data.keys()}")
+        print(f"Status in response: {data.get('status')}")
+        
+        results = data.get('results', [])
+        print(f"Number of results: {len(results)}")
+        
+        if len(results) > 0:
+            print(f"Sample result keys: {results[0].keys()}")
+            print(f"Sample result: {results[0]}")
+        
+        return results, None
     except Exception as e:
+        print(f"Exception fetching options: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return None, f"Error: {str(e)}"
 
 def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter_type='both'):
@@ -89,8 +106,15 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
     all_options = []
     today = datetime.now()
     
-    for option in options_data:
+    print(f"Starting to process {len(options_data)} options")
+    skipped_reasons = {'no_details': 0, 'no_expiration': 0, 'expired': 0, 'wrong_type': 0, 
+                       'wrong_moneyness': 0, 'low_premium': 0, 'high_delta': 0, 'processed': 0}
+    
+    for idx, option in enumerate(options_data):
         try:
+            if idx < 3:  # Log first 3 options in detail
+                print(f"Option {idx}: {option}")
+            
             details = option.get('details', {})
             greeks = option.get('greeks', {})
             last_quote = option.get('last_quote', {})
@@ -100,28 +124,35 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
             expiration_str = details.get('expiration_date')
             
             if not all([contract_type, strike, expiration_str]):
+                skipped_reasons['no_details'] += 1
                 continue
             
             # Parse expiration
             try:
                 exp_date = datetime.strptime(expiration_str, "%Y-%m-%d")
             except:
+                skipped_reasons['no_expiration'] += 1
                 continue
             
             days_to_exp = (exp_date - today).days
             if days_to_exp <= 0 or days_to_exp > 90:
+                skipped_reasons['expired'] += 1
                 continue
             
             # Filter by option type
             if contract_type == 'call' and filter_type == 'puts':
+                skipped_reasons['wrong_type'] += 1
                 continue
             if contract_type == 'put' and filter_type == 'calls':
+                skipped_reasons['wrong_type'] += 1
                 continue
             
             # Filter by moneyness
             if contract_type == 'call' and strike <= price:
+                skipped_reasons['wrong_moneyness'] += 1
                 continue
             if contract_type == 'put' and strike >= price:
+                skipped_reasons['wrong_moneyness'] += 1
                 continue
             
             # Get pricing data
@@ -130,6 +161,7 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
             premium = (bid + ask) / 2
             
             if premium < 0.05:
+                skipped_reasons['low_premium'] += 1
                 continue
             
             # Get or estimate delta
@@ -144,12 +176,23 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
             
             # Filter by delta
             if contract_type == 'call' and delta > max_delta_calls:
+                skipped_reasons['high_delta'] += 1
+                if idx < 5:
+                    print(f"Skipping call: strike={strike}, delta={delta:.3f}, max={max_delta_calls}")
                 continue
             if contract_type == 'put' and delta > max_delta_puts:
+                skipped_reasons['high_delta'] += 1
+                if idx < 5:
+                    print(f"Skipping put: strike={strike}, delta={delta:.3f}, max={max_delta_puts}")
                 continue
             
             # Calculate annualized return
             annual_return = (premium / price) * (365 / days_to_exp) * 100
+            
+            skipped_reasons['processed'] += 1
+            
+            if idx < 3:
+                print(f"✓ ACCEPTED: {contract_type} strike={strike}, delta={delta:.3f}, premium={premium:.2f}, annual={annual_return:.1f}%")
             
             all_options.append({
                 'type': 'Call' if contract_type == 'call' else 'Put',
@@ -169,6 +212,11 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
             print(f"Error processing option: {e}")
             continue
     
+    print(f"Processing complete. Reasons for skipping:")
+    for reason, count in skipped_reasons.items():
+        print(f"  {reason}: {count}")
+    print(f"Total accepted options: {len(all_options)}")
+    
     # Sort by annual return
     all_options.sort(key=lambda x: x['annual_return'], reverse=True)
     
@@ -187,7 +235,7 @@ def fetch_options_data(ticker, max_delta_calls=0.18, max_delta_puts=0.18, filter
     cache[ticker] = (result, current_time)
     
     if len(all_options) == 0:
-        return None, f"No options found for {ticker} matching delta â¤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts). Try increasing the delta filters."
+        return None, f"No options found for {ticker} matching delta ≤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts). Try increasing the delta filters."
     
     print(f"Found {len(all_options)} matching options for {ticker}")
     return result, None
@@ -215,7 +263,7 @@ def filter_cached_data(cached_result, max_delta_calls, max_delta_puts, filter_ty
     result['timestamp'] = cached_result['timestamp'] + " (cached)"
     
     if len(filtered) == 0:
-        return None, f"No options match delta â¤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts)"
+        return None, f"No options match delta ≤ {max_delta_calls:.2f} (calls) / {max_delta_puts:.2f} (puts)"
     
     return result, None
 
@@ -420,9 +468,9 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <div class="header">
-            <h1>ð Options Strategy Analyzer</h1>
+            <h1>📊 Options Strategy Analyzer</h1>
             <div class="price">{{ symbol }}: ${{ "%.2f"|format(price) }}</div>
-            <p style="color: #94a3b8; margin: 5px 0 0 0;">{{ timestamp }} â¢ Powered by Polygon.io</p>
+            <p style="color: #94a3b8; margin: 5px 0 0 0;">{{ timestamp }} • Powered by Polygon.io</p>
         </div>
 
         <div class="controls">
@@ -474,7 +522,7 @@ HTML_TEMPLATE = """
 
         {% if error %}
         <div class="card" style="background: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.5);">
-            <p>â Error: {{ error }}</p>
+            <p>❌ Error: {{ error }}</p>
         </div>
         {% else %}
         <h2 style="margin: 30px 0 20px 0;">Top Income Opportunities</h2>
@@ -516,7 +564,7 @@ HTML_TEMPLATE = """
         {% endif %}
 
         <div class="timestamp">
-            ð¡ Data cached for 5 minutes â¢ Updates refresh automatically
+            💡 Data cached for 5 minutes • Updates refresh automatically
         </div>
     </div>
 </body>
@@ -530,7 +578,7 @@ def home():
     delta_puts = float(request.args.get('delta_puts', 0.18))
     filter_type = request.args.get('filter', 'both')
     
-    print(f"Request: {symbol} (Calls Îâ¤{delta_calls}, Puts Îâ¤{delta_puts}, Filter: {filter_type})")
+    print(f"Request: {symbol} (Calls Δ≤{delta_calls}, Puts Δ≤{delta_puts}, Filter: {filter_type})")
     
     data, error = fetch_options_data(symbol, delta_calls, delta_puts, filter_type)
     
@@ -550,5 +598,3 @@ def home():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
-
-
