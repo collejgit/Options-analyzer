@@ -10,9 +10,8 @@ app = Flask(__name__)
 # Get API key from environment variable
 POLYGON_API_KEY = os.environ.get('POLYGON_API_KEY', '')
 
-# Cache for reducing API calls
-cache = {}
-CACHE_DURATION = 300  # 5 minutes
+# No cache - always fetch fresh data
+# (Polygon.io has high rate limits on paid plans)
 
 def fetch_stock_price(ticker):
     """Fetch current stock price from Polygon.io"""
