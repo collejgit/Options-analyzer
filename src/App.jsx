@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 // ─── VIX REGIME DATA (static, not user-parameterized) ─────────────
 const VIX_REGIMES = [
@@ -128,29 +128,30 @@ const DEFAULT_FORM = {
   cyclesPerWeek: 5,
 };
 
-async function loadSavedParams() {
+// Storage uses localStorage — private to each user's browser, persists across refreshes.
+function loadSavedParams() {
   try {
-    const result = await window.storage.get(STORAGE_KEY, false);
-    return result ? JSON.parse(result.value) : null;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-async function saveParams(params) {
-  // Only persist personal fields — strategy params are defaults and don't need saving
+function saveParams(params) {
+  // Only persist personal fields — strategy params are defaults, no need to save
   const toSave = {};
   PERSONAL_FIELDS.forEach(k => { toSave[k] = params[k]; });
   try {
-    await window.storage.set(STORAGE_KEY, JSON.stringify(toSave), false);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
   } catch (e) {
     console.error("Storage save failed:", e);
   }
 }
 
-async function clearSavedParams() {
+function clearSavedParams() {
   try {
-    await window.storage.delete(STORAGE_KEY, false);
+    localStorage.removeItem(STORAGE_KEY);
   } catch {}
 }
 
@@ -213,7 +214,6 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
     // Overlay any previously saved personal fields
     ...(savedValues || {}),
   }));
-  const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
   const [hasSaved, setHasSaved] = useState(!!savedValues);
 
@@ -246,12 +246,10 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
   const handleSubmit = async () => {
     const errs = validate();
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
-    setSaving(true);
     // Coerce all numeric fields to numbers before saving
     const coerced = { ...form };
     REQUIRED_NUMERIC.forEach(({k}) => { coerced[k] = Number(coerced[k]); });
-    await saveParams(coerced);
-    setSaving(false);
+    saveParams(coerced);
     setHasSaved(true);
     onSubmit(coerced);
   };
@@ -446,16 +444,15 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
         {/* Submit */}
         <button
           onClick={handleSubmit}
-          disabled={saving}
           style={{
             width: "100%", padding: "16px", marginTop: 8,
-            background: saving ? "#1a3a5a" : "linear-gradient(135deg, #1a4a7a, #1a6aa8)",
-            color: saving ? "#5a8ab0" : "#f0f8ff", border: "1px solid #2a6aa8",
-            borderRadius: 6, cursor: saving ? "default" : "pointer", fontSize: 14, fontWeight: "700",
+            background: "linear-gradient(135deg, #1a4a7a, #1a6aa8)",
+            color: "#f0f8ff", border: "1px solid #2a6aa8",
+            borderRadius: 6, cursor: "pointer", fontSize: 14, fontWeight: "700",
             fontFamily: "monospace", letterSpacing: "0.1em",
           }}
         >
-          {saving ? "SAVING…" : "GENERATE STRATEGY ANALYSIS →"}
+          GENERATE STRATEGY ANALYSIS →
         </button>
 
         {/* Storage notice + clear option */}
@@ -478,7 +475,7 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
 }
 
 // ─── MAIN DASHBOARD ───────────────────────────────────────────────
-function Dashboard({ params, onReset }) {
+function Dashboard({ params, onReset, onClearData }) {
   // ── Derive everything from params ──
   const P = params;
   const SPY = P.underlyingPrice;
@@ -586,11 +583,22 @@ function Dashboard({ params, onReset }) {
                 <div style={{ fontSize: 9, color: "#3a6a8a", marginBottom: 2 }}>ACCOUNT</div>
                 <div style={{ fontSize: 18, fontWeight: "700", color: "#c8a84b" }}>{fmt(ACCOUNT)}</div>
               </div>
-              <button onClick={onReset} style={{
-                padding: "6px 14px", background: "transparent", color: "#3a6a8a",
-                border: "1px solid #1a3a50", borderRadius: 4, cursor: "pointer",
-                fontSize: 10, fontFamily: "monospace", letterSpacing: "0.1em",
-              }}>⟵ UPDATE INPUTS</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={onReset} style={{
+                  padding: "6px 14px", background: "transparent", color: "#4a9fd4",
+                  border: "1px solid #1a3a50", borderRadius: 4, cursor: "pointer",
+                  fontSize: 10, fontFamily: "monospace", letterSpacing: "0.1em",
+                }}>⟵ UPDATE INPUTS</button>
+                <button onClick={() => {
+                  if (window.confirm("Clear all saved data and return to blank entry form?")) {
+                    onClearData();
+                  }
+                }} style={{
+                  padding: "6px 14px", background: "transparent", color: "#6a3a3a",
+                  border: "1px solid #3a1a1a", borderRadius: 4, cursor: "pointer",
+                  fontSize: 10, fontFamily: "monospace", letterSpacing: "0.1em",
+                }}>⊗ RESET ALL</button>
+              </div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 0, overflowX: "auto" }}>
@@ -1296,55 +1304,39 @@ function SH({ title, sub }) {
 
 // ─── ROOT ─────────────────────────────────────────────────────────
 export default function App() {
-  const [params, setParams] = useState(null);       // submitted params → show dashboard
-  const [savedValues, setSavedValues] = useState(undefined); // undefined = loading, null = none, obj = found
-  const [ready, setReady] = useState(false);
-
-  // On mount: try to load saved personal params from private storage
-  useEffect(() => {
-    loadSavedParams().then(saved => {
-      setSavedValues(saved || null);
-      setReady(true);
-    });
-  }, []);
+  // Load from localStorage synchronously on first render — no async needed
+  const [params, setParams] = useState(() => loadSavedParams());
+  const [savedValues, setSavedValues] = useState(() => loadSavedParams());
 
   const handleSubmit = (formParams) => {
+    saveParams(formParams);
     setSavedValues(formParams);
     setParams(formParams);
   };
 
-  const handleReset = () => {
-    // Update savedValues with the last submitted params so EntryPage re-initializes correctly
-    if (params) setSavedValues(params);
+  const handleUpdateInputs = () => {
+    // Go back to entry form with current values pre-filled
     setParams(null);
   };
 
-  const handleClearData = async () => {
-    await clearSavedParams();
+  const handleReset = () => {
+    // Clear all saved data and return to blank entry form
+    clearSavedParams();
     setSavedValues(null);
     setParams(null);
   };
 
-  if (!ready) {
-    return (
-      <div style={{ fontFamily: "monospace", background: "#050d14", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#3a6a8a" }}>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ fontSize: 12, letterSpacing: "0.2em", marginBottom: 8 }}>LOADING</div>
-          <div style={{ fontSize: 10, color: "#1a3a4a" }}>Checking for saved configuration…</div>
-        </div>
-      </div>
-    );
-  }
-
+  // If saved params exist, go straight to dashboard (survives refresh)
+  // If not, show entry form
   if (!params) {
     return (
       <EntryPage
         onSubmit={handleSubmit}
         savedValues={savedValues}
-        onClearData={handleClearData}
+        onClearData={handleReset}
       />
     );
   }
 
-  return <Dashboard params={params} onReset={handleReset} />;
+  return <Dashboard params={params} onReset={handleUpdateInputs} onClearData={handleReset} />;
 }
