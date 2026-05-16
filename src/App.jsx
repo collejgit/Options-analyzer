@@ -110,10 +110,11 @@ const STORAGE_KEY = "wheel:params";
 const PERSONAL_FIELDS = [
   "ticker","underlyingPrice",
   "totalCash","heloc","reservedForOptions",
-  "stockTicker","stockPrice","unrestrictedShares","restrictedShares",
+  "stocks",
 ];
 
 // Default form — personal fields blank, strategy fields have defaults
+const DEFAULT_STOCK = { ticker: "", price: "", unrestrictedShares: "", restrictedShares: "", ccAvgPremium: 7.00, ccCyclesPerYear: 48 };
 const DEFAULT_FORM = {
   // Personal — blank until user enters
   ticker: "",
@@ -121,15 +122,10 @@ const DEFAULT_FORM = {
   totalCash: "",
   heloc: "",
   reservedForOptions: "",
-  stockTicker: "",
-  stockPrice: "",
-  unrestrictedShares: "",
-  restrictedShares: "",
+  stocks: [{ ...DEFAULT_STOCK }],   // array of stock positions for covered calls
   // Strategy — keep defaults (not personal data)
   avgPremium: 0.60,
   cyclesPerWeek: 5,
-  ccAvgPremium: 7.00,
-  ccCyclesPerYear: 48,
 };
 
 async function loadSavedParams() {
@@ -230,13 +226,9 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
     {k:"totalCash", label:"Total Cash"},
     {k:"heloc", label:"HELOC"},
     {k:"reservedForOptions", label:"Reserved for Open Puts"},
-    {k:"stockPrice", label:"Stock Price"},
-    {k:"unrestrictedShares", label:"Unrestricted Shares"},
-    {k:"restrictedShares", label:"Restricted Shares"},
   ];
   const REQUIRED_TEXT = [
     {k:"ticker", label:"Underlying Ticker"},
-    {k:"stockTicker", label:"Stock Ticker"},
   ];
 
   const validate = () => {
@@ -266,12 +258,15 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
 
   // Derived previews — guard against blank values
   const hasCash = form.totalCash !== "" && form.reservedForOptions !== "" && form.underlyingPrice !== "";
-  const hasStock = form.unrestrictedShares !== "" && form.stockPrice !== "" && form.restrictedShares !== "";
   const freeCash = hasCash ? Math.max(0, Number(form.totalCash) - Number(form.reservedForOptions)) : null;
-  const accountValue = (hasCash && hasStock) ? Number(form.totalCash) + (Number(form.unrestrictedShares) + Number(form.restrictedShares)) * Number(form.stockPrice) : null;
+  const accountValue = hasCash ? Number(form.totalCash) + form.stocks.reduce((s,st) => s + (Number(st.unrestrictedShares)||0+Number(st.restrictedShares)||0)*Number(st.price||0), 0) : null;
   const maxContractsCash = hasCash ? Math.floor(Number(form.totalCash) / (Number(form.underlyingPrice) * 100)) : null;
   const spyAnnual = form.underlyingPrice !== "" ? form.avgPremium * 100 * 10 * form.cyclesPerWeek * 52 : null;
-  const gsAnnual = form.unrestrictedShares !== "" ? 2 * form.ccAvgPremium * 100 * form.ccCyclesPerYear : null;
+  const stocksAnnual = form.stocks.reduce((s,st) => {
+    const ccC = Math.floor((Number(st.unrestrictedShares)||0)/100);
+    return s + ccC * Number(st.ccAvgPremium||0) * 100 * Number(st.ccCyclesPerYear||48);
+  }, 0);
+  const gsAnnual = stocksAnnual > 0 ? stocksAnnual : null;
 
 
   return (
@@ -345,42 +340,78 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
 
           {/* Col 2 */}
           <div>
-            {/* Stock position */}
+            {/* Stock positions — multi-row */}
             <div style={{ marginBottom: 24 }}>
-              <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
-                STOCK POSITION (COVERED CALLS)
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
+                <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em" }}>STOCK POSITIONS (COVERED CALLS)</div>
+                <button onClick={() => setForm(f => ({ ...f, stocks: [...f.stocks, { ...DEFAULT_STOCK }] }))}
+                  style={{ padding: "3px 10px", background: "#0a2a18", color: "#3aaa6a", border: "1px solid #1a5a3a", borderRadius: 3, cursor: "pointer", fontSize: 10, fontFamily: "monospace" }}>
+                  + ADD STOCK
+                </button>
               </div>
-              <EntryField label="STOCK TICKER" k="stockTicker" type="text" note="Your equity position for covered calls"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
-              <EntryField label="CURRENT STOCK PRICE" k="stockPrice" prefix="$" step={0.01}  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
-              <EntryField label="UNRESTRICTED SHARES" k="unrestrictedShares" note="Shares you can sell / write options against"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
-              <EntryField label="RESTRICTED SHARES (RSU etc.)" k="restrictedShares" note="Locked shares — exposure only, no options"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
 
-              <div style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginTop: 4 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                  {[
-                    { label: "Unrestricted value", value: hasStock ? fmt(form.unrestrictedShares * form.stockPrice) : "—", color: hasStock ? "#4a9fd4" : "#2a4a5a" },
-                    { label: "Restricted value (locked)", value: hasStock ? fmt(form.restrictedShares * form.stockPrice) : "—", color: hasStock ? "#5a6a7a" : "#2a4a5a" },
-                    { label: "Covered call contracts", value: form.unrestrictedShares !== "" ? `${Math.floor(Number(form.unrestrictedShares) / 100)}` : "—", color: form.unrestrictedShares !== "" ? "#8b6fd4" : "#2a4a5a" },
-                    { label: "Est. account value", value: accountValue !== null ? fmt(accountValue) : "—", color: accountValue !== null ? "#c8a84b" : "#2a4a5a" },
-                  ].map((r, i) => (
-                    <div key={i}>
-                      <div style={{ fontSize: 9, color: "#3a5a6a", marginBottom: 2 }}>{r.label}</div>
-                      <div style={{ fontSize: 14, fontWeight: "700", color: r.color }}>{r.value}</div>
+              {form.stocks.map((stock, si) => {
+                const setStock = (k, v) => setForm(f => {
+                  const updated = [...f.stocks];
+                  updated[si] = { ...updated[si], [k]: v };
+                  return { ...f, stocks: updated };
+                });
+                const ccContracts = Math.floor((Number(stock.unrestrictedShares)||0) / 100);
+                const stockValue = (Number(stock.unrestrictedShares)||0 + Number(stock.restrictedShares)||0) * Number(stock.price||0);
+                return (
+                  <div key={si} style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                      <div style={{ fontSize: 10, color: "#4a9fd4", letterSpacing: "0.1em" }}>POSITION {si + 1}</div>
+                      {form.stocks.length > 1 && (
+                        <button onClick={() => setForm(f => ({ ...f, stocks: f.stocks.filter((_,i) => i !== si) }))}
+                          style={{ padding: "2px 8px", background: "transparent", color: "#6a3a3a", border: "1px solid #3a2a2a", borderRadius: 3, cursor: "pointer", fontSize: 9, fontFamily: "monospace" }}>
+                          REMOVE
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
-              </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                      {[
+                        { label: "TICKER", k: "ticker", type: "text" },
+                        { label: "PRICE", k: "price", prefix: "$", step: 0.01 },
+                        { label: "UNRESTRICTED SHARES", k: "unrestrictedShares" },
+                        { label: "RESTRICTED SHARES (RSU)", k: "restrictedShares" },
+                        { label: "AVG CC PREMIUM / CONTRACT", k: "ccAvgPremium", prefix: "$", step: 0.25 },
+                        { label: "CC CYCLES / YEAR", k: "ccCyclesPerYear", step: 1 },
+                      ].map(({ label, k, type, prefix, step }) => (
+                        <div key={k} style={{ marginBottom: 0 }}>
+                          <div style={{ fontSize: 9, color: "#3a6a8a", marginBottom: 4, letterSpacing: "0.08em" }}>{label}</div>
+                          <div style={{ display: "flex", alignItems: "center", background: "#040c14", border: "1px solid #1a3a50", borderRadius: 3, overflow: "hidden" }}>
+                            {prefix && <span style={{ padding: "0 8px", color: "#3a6a8a", fontSize: 12, background: "#080f18", borderRight: "1px solid #1a3a50" }}>{prefix}</span>}
+                            <input
+                              type={type === "text" ? "text" : "number"}
+                              value={stock[k] ?? ""}
+                              step={step || 1}
+                              placeholder="—"
+                              autoComplete="off"
+                              onChange={e => setStock(k, type === "text" ? e.target.value : (e.target.value === "" ? "" : Number(e.target.value)))}
+                              style={{ flex: 1, padding: "8px 10px", background: "transparent", border: "none", color: "#f0f8ff", fontSize: 13, fontFamily: "monospace", outline: "none" }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, fontFamily: "monospace", color: "#3a6a8a" }}>
+                      <span>Contracts: <span style={{ color: "#8b6fd4" }}>{ccContracts}</span></span>
+                      <span>Est. CC income: <span style={{ color: "#3aaa6a" }}>{fmt(ccContracts * Number(stock.ccAvgPremium||0) * 100 * Number(stock.ccCyclesPerYear||48))}/yr</span></span>
+                      {hasSaved && <span style={{ color: "#2a6a4a" }}>● saved</span>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
 
-            {/* Strategy params */}
+            {/* SPY Put strategy params */}
             <div style={{ marginBottom: 24 }}>
               <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
-                STRATEGY PARAMETERS
+                PUT STRATEGY PARAMETERS
               </div>
               <EntryField label={`AVG PUT PREMIUM / CONTRACT (${form.ticker})`} k="avgPremium" prefix="$" step={0.05} note="Your actual avg — typically $0.50–$0.70 for 1–5 DTE"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
               <EntryField label="PUT CYCLES PER WEEK" k="cyclesPerWeek" step={1} note="How many open/close cycles you run weekly"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
-              <EntryField label={`AVG CC PREMIUM / CONTRACT (${form.stockTicker})`} k="ccAvgPremium" prefix="$" step={0.25} note="Avg premium per covered call contract"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
-              <EntryField label="CC CYCLES PER YEAR" k="ccCyclesPerYear" step={1} note="Covered call sell cycles annually (48 = weekly w/ gaps)"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
 
               {/* Income preview */}
               <div style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginTop: 4 }}>
@@ -388,7 +419,7 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
                   {[
                     { label: `${form.ticker || "—"} puts`, value: spyAnnual !== null ? fmt(spyAnnual) : "—", color: spyAnnual !== null ? "#4a9fd4" : "#2a4a5a" },
-                    { label: `${form.stockTicker || "—"} calls`, value: gsAnnual !== null ? fmt(gsAnnual) : "—", color: gsAnnual !== null ? "#8b6fd4" : "#2a4a5a" },
+                    { label: "All CC income", value: gsAnnual !== null ? fmt(gsAnnual) : "—", color: gsAnnual !== null ? "#8b6fd4" : "#2a4a5a" },
                     { label: "Combined", value: (spyAnnual !== null && gsAnnual !== null) ? fmt(spyAnnual + gsAnnual) : "—", color: (spyAnnual !== null && gsAnnual !== null) ? "#c8a84b" : "#2a4a5a" },
                   ].map((r, i) => (
                     <div key={i}>
@@ -455,14 +486,19 @@ function Dashboard({ params, onReset }) {
   const RESERVED = P.reservedForOptions;
   const FREE_CASH = Math.max(0, CASH - RESERVED);
   const HELOC = P.heloc;
-  const GS_PRICE = P.stockPrice;
-  const GS_UNREST = P.unrestrictedShares;
-  const GS_REST = P.restrictedShares;
-  const ACCOUNT = CASH + (GS_UNREST + GS_REST) * GS_PRICE;
-  const CC_CONTRACTS = Math.floor(GS_UNREST / 100);
+  // Multi-stock aggregates
+  const STOCKS = P.stocks || [];
+  const TOTAL_UNREST = STOCKS.reduce((s,st) => s + (Number(st.unrestrictedShares)||0), 0);
+  const TOTAL_REST = STOCKS.reduce((s,st) => s + (Number(st.restrictedShares)||0), 0);
+  const TOTAL_STOCK_VALUE = STOCKS.reduce((s,st) => s + ((Number(st.unrestrictedShares)||0)+(Number(st.restrictedShares)||0))*(Number(st.price)||0), 0);
+  const ACCOUNT = CASH + TOTAL_STOCK_VALUE;
+  // Backward compat aliases (used in shock calc — use first stock as primary)
+  const GS_PRICE = STOCKS[0] ? Number(STOCKS[0].price)||0 : 0;
+  const GS_UNREST = STOCKS[0] ? Number(STOCKS[0].unrestrictedShares)||0 : 0;
+  const GS_REST = STOCKS[0] ? Number(STOCKS[0].restrictedShares)||0 : 0;
   const CYCLES = P.cyclesPerWeek;
   const PREM = P.avgPremium;
-  const PREM_MID = 0.60; // rung calcs
+  const PREM_MID = 0.60;
 
   // Rung specs (strikes scale with SPY price)
   const RUNGS = [
@@ -487,8 +523,14 @@ function Dashboard({ params, onReset }) {
   const spyGross = premSlider * 100 * contracts * CYCLES * 52;
   const commissions = contracts * 0.65 * CYCLES * 52;
   const spyNet = spyGross - commissions;
-  const gsCallGross = CC_CONTRACTS * P.ccAvgPremium * 100 * P.ccCyclesPerYear;
-  const gsCallComm = CC_CONTRACTS * 0.65 * P.ccCyclesPerYear;
+  const gsCallGross = STOCKS.reduce((s,st) => {
+    const c = Math.floor((Number(st.unrestrictedShares)||0)/100);
+    return s + c * (Number(st.ccAvgPremium)||0) * 100 * (Number(st.ccCyclesPerYear)||48);
+  }, 0);
+  const gsCallComm = STOCKS.reduce((s,st) => {
+    const c = Math.floor((Number(st.unrestrictedShares)||0)/100);
+    return s + c * 0.65 * (Number(st.ccCyclesPerYear)||48);
+  }, 0);
   const gsCallNet = gsCallGross - gsCallComm;
   const spaxxNet = FREE_CASH * 0.042;
   const totalNet = spyNet + gsCallNet + spaxxNet;
@@ -531,7 +573,7 @@ function Dashboard({ params, onReset }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
             <div>
               <div style={{ fontSize: 9, letterSpacing: "0.25em", color: "#4a9fd4", marginBottom: 4 }}>
-                {P.ticker} WHEEL · {P.stockTicker} COVERED CALLS · CASH-SECURED
+                {P.ticker} WHEEL · {STOCKS.map(s=>s.ticker).filter(Boolean).join(", ")} COVERED CALLS · CASH-SECURED
               </div>
               <div style={{ fontSize: 20, fontWeight: "700", color: "#f0f8ff" }}>Strategy Command Center</div>
             </div>
@@ -571,7 +613,7 @@ function Dashboard({ params, onReset }) {
         {/* ═══ CAPITAL ═══ */}
         {section === "capital" && (
           <div>
-            <SH title="Capital Picture" sub={`${P.ticker} @ $${SPY} · ${P.stockTicker} @ $${GS_PRICE} · Confirmed balance inputs`} />
+            <SH title="Capital Picture" sub={`${P.ticker} @ $${SPY} · ${STOCKS.map(s=>s.ticker).filter(Boolean).join(", ")} · Confirmed balance inputs`} />
             <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
               {[
                 {label:"Total Cash",value:fmt(CASH),sub:"Brokerage balance",color:"#4a9fd4"},
@@ -589,8 +631,8 @@ function Dashboard({ params, onReset }) {
                   {label:"Total Cash",value:fmt(CASH),color:"#4a9fd4"},
                   {label:"  Reserved for open puts",value:fmt(-RESERVED),color:"#e87a00"},
                   {label:"  Free cash",value:fmt(FREE_CASH),bold:true,color:"#3aaa6a"},
-                  {label:`${P.stockTicker} unrestricted (${GS_UNREST} sh)`,value:fmt(GS_UNREST*GS_PRICE),color:"#4a9fd4"},
-                  {label:`${P.stockTicker} restricted (${GS_REST} sh)`,value:fmt(GS_REST*GS_PRICE),color:"#5a6a7a"},
+                  {label:`Stock positions (unrestricted: ${TOTAL_UNREST} sh)`,value:fmt(STOCKS.reduce((s,st)=>(Number(st.unrestrictedShares)||0)*(Number(st.price)||0)+s,0)),color:"#4a9fd4"},
+                  {label:`Stock positions (restricted: ${TOTAL_REST} sh)`,value:fmt(STOCKS.reduce((s,st)=>(Number(st.restrictedShares)||0)*(Number(st.price)||0)+s,0)),color:"#5a6a7a"},
                   {label:"HELOC backstop (external)",value:fmt(HELOC),color:"#8b6fd4"},
                 ].map((r,i) => (
                   <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #1a2a3a",fontWeight:r.bold?"700":"400"}}>
@@ -605,24 +647,34 @@ function Dashboard({ params, onReset }) {
               </Pan>
 
               <Pan>
-                <Lbl>{P.stockTicker} POSITION</Lbl>
-                {[
-                  {label:"Unrestricted",shares:GS_UNREST,value:GS_UNREST*GS_PRICE,status:`Can sell / write ${Math.floor(GS_UNREST/100)} call contracts`,color:"#4a9fd4"},
-                  {label:"Restricted (RSU)",shares:GS_REST,value:GS_REST*GS_PRICE,status:"Locked — exposure only",color:"#3a5a6a"},
-                ].map((g,i) => (
-                  <div key={i} style={{padding:"12px 14px",borderRadius:6,marginBottom:10,background:"#06101a",border:`1px solid ${g.color}25`,borderLeft:`3px solid ${g.color}`}}>
-                    <div style={{fontSize:9,color:g.color,letterSpacing:"0.1em",marginBottom:4}}>{g.label.toUpperCase()}</div>
-                    <div style={{fontSize:18,fontWeight:"700",color:"#f0f8ff",marginBottom:2}}>{g.shares} shares</div>
-                    <div style={{fontSize:13,color:g.color,marginBottom:4}}>{fmt(g.value)}</div>
-                    <div style={{fontSize:10,color:"#3a5a6a"}}>{g.status}</div>
-                  </div>
-                ))}
+                <Lbl>STOCK POSITIONS</Lbl>
+                {STOCKS.map((st, si) => {
+                  const unrest = Number(st.unrestrictedShares)||0;
+                  const rest = Number(st.restrictedShares)||0;
+                  const price = Number(st.price)||0;
+                  const ccC = Math.floor(unrest/100);
+                  const ccIncome = ccC * (Number(st.ccAvgPremium)||0) * 100 * (Number(st.ccCyclesPerYear)||48);
+                  return (
+                    <div key={si} style={{padding:"10px 14px",borderRadius:6,marginBottom:8,background:"#06101a",border:"1px solid #1a3a5025",borderLeft:"3px solid #4a9fd4"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+                        <span style={{fontSize:13,fontWeight:"700",color:"#4a9fd4"}}>{st.ticker || `Stock ${si+1}`}</span>
+                        <span style={{fontSize:12,color:"#c8a84b"}}>{fmt((unrest+rest)*price)}</span>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:6,fontSize:10,fontFamily:"monospace"}}>
+                        <div><div style={{color:"#3a6a8a",marginBottom:2}}>Price</div><div>${price.toLocaleString()}</div></div>
+                        <div><div style={{color:"#3a6a8a",marginBottom:2}}>Unrestricted</div><div style={{color:"#4a9fd4"}}>{unrest} sh</div></div>
+                        <div><div style={{color:"#3a6a8a",marginBottom:2}}>Restricted</div><div style={{color:"#5a6a7a"}}>{rest} sh</div></div>
+                        <div><div style={{color:"#3a6a8a",marginBottom:2}}>CC Income/yr</div><div style={{color:"#3aaa6a"}}>{fmt(ccIncome)}</div></div>
+                      </div>
+                    </div>
+                  );
+                })}
 
                 <Lbl style={{marginTop:8}}>KEY STRUCTURAL FACTS</Lbl>
                 {[
                   ["Zero margin cost","Every premium dollar is net income. No interest offset."],
                   [fmt(RESERVED)+" cycles weekly","Reserved collateral frees as puts expire — it's revolving."],
-                  ["HELOC removes forced-sale risk",`${fmt(CASH)} cash + ${fmt(HELOC)} HELOC = ${fmt(CASH+HELOC)} capacity.`],
+                  ["HELOC removes forced-sale risk",`${fmt(CASH)} cash + ${fmt(HELOC)} HELOC = ${fmt(CASH+HELOC)} capacity. Total stock equity: ${fmt(TOTAL_STOCK_VALUE)}.`],
                 ].map(([t,b],i) => (
                   <div key={i} style={{marginBottom:8,padding:"8px 10px",background:"#06101a",borderRadius:4,borderLeft:"2px solid #c8a84b"}}>
                     <div style={{fontSize:10,color:"#c8a84b",marginBottom:3}}>{t}</div>
@@ -689,7 +741,7 @@ function Dashboard({ params, onReset }) {
                   <Lbl>ANNUAL INCOME — ALL LEGS</Lbl>
                   {[
                     {leg:`${P.ticker} short puts`,detail:`${contracts}c × $${premSlider.toFixed(2)} × ${CYCLES}×/wk × 52`,gross:spyGross,net:spyNet,color:"#4a9fd4"},
-                    {leg:`${P.stockTicker} covered calls`,detail:`${CC_CONTRACTS}c × $${P.ccAvgPremium.toFixed(2)} × ${P.ccCyclesPerYear} cycles/yr`,gross:gsCallGross,net:gsCallNet,color:"#8b6fd4"},
+                    {leg:`All covered calls (${STOCKS.length} position${STOCKS.length!==1?"s":""})`,detail:STOCKS.map(st=>`${st.ticker||"?"} ${Math.floor((Number(st.unrestrictedShares)||0)/100)}c`).join(" · "),gross:gsCallGross,net:gsCallNet,color:"#8b6fd4"},
                     {leg:"SPAXX on free cash",detail:`${fmt(FREE_CASH)} × 4.2%`,gross:spaxxNet,net:spaxxNet,color:"#3aaa6a"},
                   ].map((r,i) => (
                     <div key={i} style={{padding:"10px 12px",borderRadius:6,marginBottom:8,background:"#06101a",borderLeft:`3px solid ${r.color}`}}>
@@ -744,7 +796,7 @@ function Dashboard({ params, onReset }) {
         {/* ═══ SHOCK ═══ */}
         {section === "shock" && (
           <div>
-            <SH title="Shock Test" sub={`${P.ticker} @ $${SPY} · ${P.stockTicker} @ $${GS_PRICE} · Drag slider to model any decline`} />
+            <SH title="Shock Test" sub={`${P.ticker} @ $${SPY} · ${STOCKS.map(s=>s.ticker+` $${Number(s.price)||0}`).join(", ")} · Drag slider`} />
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <Pan>
                 <Lbl>SCENARIO CONTROLS</Lbl>
@@ -758,7 +810,7 @@ function Dashboard({ params, onReset }) {
                     style={{width:"100%",accentColor:"#c8a84b"}}
                   />
                   <div style={{fontSize:10,color:"#2a5a6a",marginTop:4}}>
-                    {P.ticker}: ${SPY} → ${spyShocked} · {P.stockTicker}: ${GS_PRICE} → ${gsShocked} (1.3× beta)
+                    {P.ticker}: ${SPY} → ${spyShocked} · Primary stock: ${GS_PRICE} → ${gsShocked} (1.3× beta est.)
                   </div>
                 </div>
                 <button onClick={()=>setUseHeloc(!useHeloc)} style={{padding:"8px 14px",background:useHeloc?"#8b6fd4":"#0a1a28",color:useHeloc?"#fff":"#3a6a8a",border:`1px solid ${useHeloc?"#8b6fd4":"#1a3a50"}`,borderRadius:4,cursor:"pointer",fontSize:10,fontFamily:"monospace",fontWeight:"700",marginBottom:16}}>
@@ -768,8 +820,8 @@ function Dashboard({ params, onReset }) {
                 <Lbl>SHOCK P&L</Lbl>
                 {[
                   {label:`${P.ticker} puts (${contracts}c)`,value:putPnl,neg:putPnl<0},
-                  {label:`${P.stockTicker} restricted (${GS_REST} sh)`,value:gsRestPnl,neg:true},
-                  {label:`${P.stockTicker} unrestricted (${GS_UNREST} sh)`,value:gsUnrestPnl,neg:true},
+                  {label:`Stock equity — restricted (${TOTAL_REST} sh)`,value:gsRestPnl,neg:true},
+                  {label:`Stock equity — unrestricted (${TOTAL_UNREST} sh)`,value:gsUnrestPnl,neg:true},
                   {label:"Combined P&L",value:totalPnl,neg:totalPnl<0,bold:true},
                 ].map((r,i) => (
                   <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #1a2a3a",fontWeight:r.bold?"700":"400"}}>
@@ -824,10 +876,10 @@ function Dashboard({ params, onReset }) {
                 <div style={{marginTop:16,padding:"10px 12px",background:"#06101a",borderRadius:4,borderLeft:"3px solid #4a9fd4"}}>
                   <div style={{fontSize:9,color:"#4a9fd4",marginBottom:4,letterSpacing:"0.1em"}}>DOMINANT RISK AT THIS LEVEL</div>
                   <div style={{fontSize:11,color:"#5a7a8a",lineHeight:1.7}}>
-                    {P.stockTicker} equity loss ({GS_UNREST+GS_REST} shares): {fmt(gsRestPnl+gsUnrestPnl)} vs. put impact: {fmt(putPnl)}.
+                    Stock equity loss ({TOTAL_UNREST+TOTAL_REST} shares total): {fmt(gsRestPnl+gsUnrestPnl)} vs. put impact: {fmt(putPnl)}.
                     {Math.abs(gsRestPnl+gsUnrestPnl) > Math.abs(putPnl)
-                      ? ` ${P.stockTicker} is the larger hit — stock concentration dominates at −${shockPct}%.`
-                      : ` The puts are the primary concern at this decline level.`}
+                      ? " Stock concentration is the larger hit at this decline level."
+                      : " The puts are the primary concern at this decline level."}
                   </div>
                 </div>
               </Pan>
@@ -1257,11 +1309,13 @@ export default function App() {
   }, []);
 
   const handleSubmit = (formParams) => {
+    setSavedValues(formParams);
     setParams(formParams);
   };
 
   const handleReset = () => {
-    // Go back to entry page with saved values pre-filled
+    // Update savedValues with the last submitted params so EntryPage re-initializes correctly
+    if (params) setSavedValues(params);
     setParams(null);
   };
 
