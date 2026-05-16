@@ -158,6 +158,42 @@ async function clearSavedParams() {
   } catch {}
 }
 
+function Field({ label, k, type = "number", prefix, step = 1, note, placeholder, value, error, onChange, saved }) {
+  const hasError = !!error;
+  const isPersonalField = PERSONAL_FIELDS.includes(k);
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 5 }}>
+        <label htmlFor={`field-${k}`} style={{ fontSize: 10, color: hasError ? "#e87a7a" : isPersonalField ? "#c8a84b" : "#4a9fd4", letterSpacing: "0.12em" }}>
+          {label}
+        </label>
+        {hasError && <span style={{ fontSize: 9, color: "#e87a7a" }}>✕ required</span>}
+        {isPersonalField && saved && <span style={{ fontSize: 9, color: "#2a6a4a" }}>● saved</span>}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", background: "#06101a", border: `1px solid ${hasError ? "#6a2a2a" : "#1e3a50"}`, borderRadius: 4, overflow: "hidden" }}>
+        {prefix && <span style={{ padding: "0 10px", color: "#3a6a8a", fontSize: 13, background: "#0a1a2a", borderRight: "1px solid #1e3a50" }}>{prefix}</span>}
+        <input
+          id={`field-${k}`}
+          name={k}
+          autoComplete="off"
+          tabIndex={0}
+          type={type === "number" ? "number" : "text"}
+          value={value}
+          step={step}
+          placeholder={placeholder || (type === "number" ? "—" : "—")}
+          onChange={onChange}
+          style={{
+            flex: 1, padding: "10px 12px", background: "transparent",
+            border: "none", color: "#f0f8ff", fontSize: 14, fontFamily: "monospace",
+            outline: "none",
+          }}
+        />
+      </div>
+      {note && !hasError && <div style={{ fontSize: 10, color: "#2a5a6a", marginTop: 3 }}>{note}</div>}
+    </div>
+  );
+}
+
 // ─── ENTRY PAGE ───────────────────────────────────────────────────
 function EntryPage({ onSubmit, savedValues, onClearData }) {
   const [form, setForm] = useState(() => ({
@@ -167,6 +203,7 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
   }));
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState({});
+  const [submitted, setSubmitted] = useState(false);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const num = (k, v) => set(k, v === "" ? "" : Number(v));
@@ -207,6 +244,7 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
     REQUIRED_NUMERIC.forEach(({k}) => { coerced[k] = Number(coerced[k]); });
     await saveParams(coerced);
     setSaving(false);
+    setSubmitted(true);
     onSubmit(coerced);
   };
 
@@ -293,8 +331,33 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
               <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
                 UNDERLYING (PUT WHEEL)
               </div>
-              <Field label="TICKER" k="ticker" type="text" note="The index or ETF you're writing puts on" />
-              <Field label="CURRENT PRICE" k="underlyingPrice" prefix="$" step={0.01} note="Today's market price" />
+              <Field
+                label="TICKER"
+                k="ticker"
+                type="text"
+                value={form.ticker}
+                error={errors.ticker}
+                onChange={e => {
+                  if (errors.ticker) setErrors(prev => { const n = {...prev}; delete n.ticker; return n; });
+                  set("ticker", e.target.value);
+                }}
+                saved={submitted}
+                note="The index or ETF you're writing puts on"
+              />
+              <Field
+                label="CURRENT PRICE"
+                k="underlyingPrice"
+                prefix="$"
+                step={0.01}
+                value={form.underlyingPrice}
+                error={errors.underlyingPrice}
+                onChange={e => {
+                  if (errors.underlyingPrice) setErrors(prev => { const n = {...prev}; delete n.underlyingPrice; return n; });
+                  num("underlyingPrice", e.target.value);
+                }}
+                saved={submitted}
+                note="Today's market price"
+              />
             </div>
 
             {/* Cash */}
@@ -302,9 +365,45 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
               <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
                 CASH & COLLATERAL
               </div>
-              <Field label="TOTAL CASH (brokerage)" k="totalCash" prefix="$" note="All cash including settled option proceeds" />
-              <Field label="RESERVED FOR OPEN PUTS" k="reservedForOptions" prefix="$" note="Fidelity 'Cash reserved for options strategies'" />
-              <Field label="HELOC / EXTERNAL BACKSTOP" k="heloc" prefix="$" note="Available credit line for assignment funding" />
+              <Field
+                label="TOTAL CASH (brokerage)"
+                k="totalCash"
+                prefix="$"
+                value={form.totalCash}
+                error={errors.totalCash}
+                onChange={e => {
+                  if (errors.totalCash) setErrors(prev => { const n = {...prev}; delete n.totalCash; return n; });
+                  num("totalCash", e.target.value);
+                }}
+                saved={submitted}
+                note="All cash including settled option proceeds"
+              />
+              <Field
+                label="RESERVED FOR OPEN PUTS"
+                k="reservedForOptions"
+                prefix="$"
+                value={form.reservedForOptions}
+                error={errors.reservedForOptions}
+                onChange={e => {
+                  if (errors.reservedForOptions) setErrors(prev => { const n = {...prev}; delete n.reservedForOptions; return n; });
+                  num("reservedForOptions", e.target.value);
+                }}
+                saved={submitted}
+                note="Fidelity 'Cash reserved for options strategies'"
+              />
+              <Field
+                label="HELOC / EXTERNAL BACKSTOP"
+                k="heloc"
+                prefix="$"
+                value={form.heloc}
+                error={errors.heloc}
+                onChange={e => {
+                  if (errors.heloc) setErrors(prev => { const n = {...prev}; delete n.heloc; return n; });
+                  num("heloc", e.target.value);
+                }}
+                saved={submitted}
+                note="Available credit line for assignment funding"
+              />
 
               {/* Derived preview */}
               <div style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginTop: 4 }}>
@@ -330,10 +429,56 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
               <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
                 STOCK POSITION (COVERED CALLS)
               </div>
-              <Field label="STOCK TICKER" k="stockTicker" type="text" note="Your equity position for covered calls" />
-              <Field label="CURRENT STOCK PRICE" k="stockPrice" prefix="$" step={0.01} />
-              <Field label="UNRESTRICTED SHARES" k="unrestrictedShares" note="Shares you can sell / write options against" />
-              <Field label="RESTRICTED SHARES (RSU etc.)" k="restrictedShares" note="Locked shares — exposure only, no options" />
+              <Field
+                label="STOCK TICKER"
+                k="stockTicker"
+                type="text"
+                value={form.stockTicker}
+                error={errors.stockTicker}
+                onChange={e => {
+                  if (errors.stockTicker) setErrors(prev => { const n = {...prev}; delete n.stockTicker; return n; });
+                  set("stockTicker", e.target.value);
+                }}
+                saved={submitted}
+                note="Your equity position for covered calls"
+              />
+              <Field
+                label="CURRENT STOCK PRICE"
+                k="stockPrice"
+                prefix="$"
+                step={0.01}
+                value={form.stockPrice}
+                error={errors.stockPrice}
+                onChange={e => {
+                  if (errors.stockPrice) setErrors(prev => { const n = {...prev}; delete n.stockPrice; return n; });
+                  num("stockPrice", e.target.value);
+                }}
+                saved={submitted}
+              />
+              <Field
+                label="UNRESTRICTED SHARES"
+                k="unrestrictedShares"
+                value={form.unrestrictedShares}
+                error={errors.unrestrictedShares}
+                onChange={e => {
+                  if (errors.unrestrictedShares) setErrors(prev => { const n = {...prev}; delete n.unrestrictedShares; return n; });
+                  num("unrestrictedShares", e.target.value);
+                }}
+                saved={submitted}
+                note="Shares you can sell / write options against"
+              />
+              <Field
+                label="RESTRICTED SHARES (RSU etc.)"
+                k="restrictedShares"
+                value={form.restrictedShares}
+                error={errors.restrictedShares}
+                onChange={e => {
+                  if (errors.restrictedShares) setErrors(prev => { const n = {...prev}; delete n.restrictedShares; return n; });
+                  num("restrictedShares", e.target.value);
+                }}
+                saved={submitted}
+                note="Locked shares — exposure only, no options"
+              />
 
               <div style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginTop: 4 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -357,10 +502,60 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
               <div style={{ fontSize: 10, color: "#c8a84b", letterSpacing: "0.2em", marginBottom: 12, paddingBottom: 8, borderBottom: "1px solid #1a2a3a" }}>
                 STRATEGY PARAMETERS
               </div>
-              <Field label={`AVG PUT PREMIUM / CONTRACT (${form.ticker})`} k="avgPremium" prefix="$" step={0.05} note="Your actual avg — typically $0.50–$0.70 for 1–5 DTE" />
-              <Field label="PUT CYCLES PER WEEK" k="cyclesPerWeek" step={1} note="How many open/close cycles you run weekly" />
-              <Field label={`AVG CC PREMIUM / CONTRACT (${form.stockTicker})`} k="ccAvgPremium" prefix="$" step={0.25} note="Avg premium per covered call contract" />
-              <Field label="CC CYCLES PER YEAR" k="ccCyclesPerYear" step={1} note="Covered call sell cycles annually (48 = weekly w/ gaps)" />
+              <Field
+                label={`AVG PUT PREMIUM / CONTRACT (${form.ticker})`}
+                k="avgPremium"
+                prefix="$"
+                step={0.05}
+                value={form.avgPremium}
+                error={errors.avgPremium}
+                onChange={e => {
+                  if (errors.avgPremium) setErrors(prev => { const n = {...prev}; delete n.avgPremium; return n; });
+                  num("avgPremium", e.target.value);
+                }}
+                saved={submitted}
+                note="Your actual avg — typically $0.50–$0.70 for 1–5 DTE"
+              />
+              <Field
+                label="PUT CYCLES PER WEEK"
+                k="cyclesPerWeek"
+                step={1}
+                value={form.cyclesPerWeek}
+                error={errors.cyclesPerWeek}
+                onChange={e => {
+                  if (errors.cyclesPerWeek) setErrors(prev => { const n = {...prev}; delete n.cyclesPerWeek; return n; });
+                  num("cyclesPerWeek", e.target.value);
+                }}
+                saved={submitted}
+                note="How many open/close cycles you run weekly"
+              />
+              <Field
+                label={`AVG CC PREMIUM / CONTRACT (${form.stockTicker})`}
+                k="ccAvgPremium"
+                prefix="$"
+                step={0.25}
+                value={form.ccAvgPremium}
+                error={errors.ccAvgPremium}
+                onChange={e => {
+                  if (errors.ccAvgPremium) setErrors(prev => { const n = {...prev}; delete n.ccAvgPremium; return n; });
+                  num("ccAvgPremium", e.target.value);
+                }}
+                saved={submitted}
+                note="Avg premium per covered call contract"
+              />
+              <Field
+                label="CC CYCLES PER YEAR"
+                k="ccCyclesPerYear"
+                step={1}
+                value={form.ccCyclesPerYear}
+                error={errors.ccCyclesPerYear}
+                onChange={e => {
+                  if (errors.ccCyclesPerYear) setErrors(prev => { const n = {...prev}; delete n.ccCyclesPerYear; return n; });
+                  num("ccCyclesPerYear", e.target.value);
+                }}
+                saved={submitted}
+                note="Covered call sell cycles annually (48 = weekly w/ gaps)"
+              />
 
               {/* Income preview */}
               <div style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginTop: 4 }}>
