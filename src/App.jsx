@@ -516,6 +516,27 @@ function Dashboard({ params, onReset, onClearData }) {
   const [itmScenario, setItmScenario] = useState(0);
   const [ladderRung, setLadderRung] = useState(0);
 
+  // Collar wheel state — per-stock inputs
+  const [collarInputs, setCollarInputs] = useState(() =>
+    (STOCKS || []).map(() => ({
+      longPutOtmPct: 5,          // % OTM for long put (user input)
+      collarDte: 30,             // DTE for collar (long put + short call)
+      spreadDte: 14,             // DTE for short put spread leg
+      spreadWidth: 5,            // $ width between long put and short put below
+      cyclesPerYear: 12,         // collar cycles / year
+      spreadCyclesPerYear: 26,   // spread leg cycles / year
+      longPutIv: 0.22,           // IV used to estimate long put cost
+      shortCallIv: 0.20,         // IV for short call
+      shortPutIv: 0.21,          // IV for short put spread leg
+    }))
+  );
+  const setCollarInput = (si, k, v) => setCollarInputs(prev => {
+    const updated = [...prev];
+    updated[si] = { ...updated[si], [k]: v };
+    return updated;
+  });
+  const [activeCollarStock, setActiveCollarStock] = useState(0);
+
   // Derived income
   const spyGross = premSlider * 100 * contracts * CYCLES * 52;
   const commissions = contracts * 0.65 * CYCLES * 52;
@@ -557,6 +578,7 @@ function Dashboard({ params, onReset, onClearData }) {
     {id:"vix",label:"VIX Rules"},
     {id:"roll",label:"Roll Rules"},
     {id:"itm",label:"ITM Decisions"},
+    {id:"collar",label:"Collar Wheel"},
   ];
 
   const sev = {critical:"#cc3333",high:"#e87a00",medium:"#c8a84b",low:"#3aaa6a",opportunity:"#4a9fd4"};
@@ -1150,6 +1172,317 @@ function Dashboard({ params, onReset, onClearData }) {
                 </div>
               );
             })()}
+          </div>
+        )}
+
+
+        {/* ═══ COLLAR WHEEL ═══ */}
+        {section === "collar" && (
+          <div>
+            <SH title="Delta-Neutral Collar Wheel" sub="Long put hedge + short call (self-financing collar) + short put spread for income · Per stock position" />
+
+            {/* Concept explainer */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:20}}>
+              {[
+                {leg:"① Long Put",color:"#cc3333",desc:"Buys downside protection at your chosen % OTM. Defines your floor. Paid for by the short call."},
+                {leg:"② Short Call (symmetric)",color:"#c8a84b",desc:"Sold at same $ distance above current price as long put is below. Collects premium to finance the long put. Caps upside."},
+                {leg:"③ Short Put Spread",color:"#3aaa6a",desc:"Short put just below the long put strike, long put is the hedge. Bull put spread — defined max loss, reduced collateral. This is your income engine."},
+              ].map((c,i) => (
+                <div key={i} style={{padding:"12px 14px",background:"#0a1a28",borderRadius:6,borderTop:`2px solid ${c.color}`}}>
+                  <div style={{fontSize:11,fontWeight:"700",color:c.color,marginBottom:6}}>{c.leg}</div>
+                  <div style={{fontSize:11,color:"#5a7a8a",lineHeight:1.7}}>{c.desc}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Stock selector */}
+            {STOCKS.length > 1 && (
+              <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+                {STOCKS.map((st,si) => (
+                  <button key={si} onClick={()=>setActiveCollarStock(si)} style={{
+                    padding:"7px 14px",
+                    background:activeCollarStock===si?"#4a9fd4":"#0a1a28",
+                    color:activeCollarStock===si?"#fff":"#4a9fd4",
+                    border:"2px solid #4a9fd4",borderRadius:4,cursor:"pointer",
+                    fontFamily:"monospace",fontSize:11,fontWeight:"700",
+                  }}>{st.ticker||`Stock ${si+1}`} @ ${Number(st.price)||0}</button>
+                ))}
+              </div>
+            )}
+
+            {/* Per-stock collar model */}
+            {STOCKS.map((st, si) => {
+              if (si !== activeCollarStock && STOCKS.length > 1) return null;
+              const inp = collarInputs[si] || {};
+              const price = Number(st.price) || 0;
+              const unrest = Number(st.unrestrictedShares) || 0;
+              const shares = unrest;
+              const contracts = Math.floor(shares / 100);
+              if (contracts === 0 || price === 0) return (
+                <div key={si} style={{padding:"20px",background:"#0a1a28",borderRadius:6,color:"#4a6a8a",textAlign:"center"}}>
+                  No unrestricted shares entered for {st.ticker||`Stock ${si+1}`} — add shares on the Setup page.
+                </div>
+              );
+
+              // ── Strike calculations ──
+              const longPutStrike = Math.round(price * (1 - inp.longPutOtmPct / 100));
+              const collarCallStrike = Math.round(price + (price - longPutStrike)); // symmetric
+              const shortPutStrike = longPutStrike - inp.spreadWidth;              // below long put
+              const spreadWidth = inp.spreadWidth;
+
+              // ── Premium estimates using simplified BSM-like approximation ──
+              // Long put cost: IV × price × sqrt(DTE/365) × 0.4 (ATM factor scaled for OTM)
+              const collarDteFrac = inp.collarDte / 365;
+              const spreadDteFrac = inp.spreadDte / 365;
+              const otmFactor = Math.exp(-inp.longPutOtmPct / 100 * 2); // decay for OTM
+
+              const longPutCostPerShare = price * inp.longPutIv * Math.sqrt(collarDteFrac) * 0.4 * otmFactor;
+              const shortCallPremPerShare = price * inp.shortCallIv * Math.sqrt(collarDteFrac) * 0.4 * otmFactor;
+              const shortPutPremPerShare = price * inp.shortPutIv * Math.sqrt(spreadDteFrac) * 0.4 * Math.exp(-inp.longPutOtmPct / 100 * 2.1);
+
+              const longPutCost = longPutCostPerShare * 100 * contracts;
+              const shortCallPrem = shortCallPremPerShare * 100 * contracts;
+              const shortPutPrem = shortPutPremPerShare * 100 * contracts;
+
+              // ── Net collar cost (should be near zero or small credit) ──
+              const collarNetPerCycle = shortCallPrem - longPutCost;
+              const spreadIncomePerCycle = shortPutPrem;
+              const maxLossSpread = spreadWidth * 100 * contracts;
+              const collarCollateral = Math.max(0, -collarNetPerCycle); // cash needed if net debit
+
+              // ── Annual projections ──
+              const collarNetAnnual = collarNetPerCycle * inp.cyclesPerYear;
+              const spreadIncomeAnnual = spreadIncomePerCycle * inp.spreadCyclesPerYear;
+              const totalAnnualGross = collarNetAnnual + spreadIncomeAnnual;
+              const commAnnual = contracts * 3 * 0.65 * inp.cyclesPerYear + contracts * 0.65 * inp.spreadCyclesPerYear;
+              const totalAnnualNet = totalAnnualGross - commAnnual;
+              const yieldOnPosition = price * shares > 0 ? totalAnnualNet / (price * shares) * 100 : 0;
+
+              // ── Delta estimates ──
+              // Long put: negative delta (approx -0.4 × otmFactor)
+              // Short call: negative delta (approx -0.4 × otmFactor)
+              // Short put: positive delta (approx +0.35 × otmFactor)
+              // Stock: +1 per share
+              const deltaStock = shares;
+              const deltaLongPut = -0.4 * otmFactor * shares;
+              const deltaShortCall = -0.4 * otmFactor * shares;
+              const deltaShortPut = 0.35 * otmFactor * contracts * 100;
+              const netDelta = deltaStock + deltaLongPut + deltaShortCall + deltaShortPut;
+              const deltaReductionPct = Math.abs(1 - netDelta / deltaStock) * 100;
+
+              // ── Payoff at expiry scenarios ──
+              const scenarios = [
+                { label: "Stock flat", price: price },
+                { label: `-${inp.longPutOtmPct}% (at long put)`, price: longPutStrike },
+                { label: `-${inp.longPutOtmPct + 5}% (below spread)`, price: shortPutStrike - 10 },
+                { label: `+${inp.longPutOtmPct}% (at short call)`, price: collarCallStrike },
+                { label: "+10% (above call)", price: Math.round(price * 1.10) },
+              ].map(sc => {
+                const stockPnl = (sc.price - price) * shares;
+                // Long put value
+                const longPutValue = Math.max(0, longPutStrike - sc.price) * contracts * 100;
+                const longPutNet = longPutValue - longPutCost;
+                // Short call value (loss if called away)
+                const shortCallLoss = Math.max(0, sc.price - collarCallStrike) * contracts * 100;
+                const shortCallNet = shortCallPrem - shortCallLoss;
+                // Short put (spread leg)
+                const shortPutLoss = Math.min(Math.max(0, shortPutStrike - sc.price), spreadWidth) * contracts * 100;
+                const shortPutNet = shortPutPrem - shortPutLoss;
+                const total = stockPnl + longPutNet + shortCallNet + shortPutNet;
+                return { ...sc, stockPnl, longPutNet, shortCallNet, shortPutNet, total };
+              });
+
+              const SliderRow = ({ label, stateKey, min, max, step, fmt: fmtFn, note }) => (
+                <div style={{marginBottom:12}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                    <span style={{fontSize:10,color:"#5a7a8a"}}>{label}</span>
+                    <span style={{fontSize:13,fontWeight:"700",color:"#c8a84b"}}>{fmtFn(inp[stateKey])}</span>
+                  </div>
+                  <input type="range" min={min} max={max} step={step} value={inp[stateKey]}
+                    onChange={e=>setCollarInput(si,stateKey,Number(e.target.value))}
+                    style={{width:"100%",accentColor:"#c8a84b"}}
+                  />
+                  {note && <div style={{fontSize:9,color:"#2a5a6a",marginTop:2}}>{note}</div>}
+                </div>
+              );
+
+              return (
+                <div key={si}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1.6fr",gap:16,marginBottom:20}}>
+
+                    {/* ── Left: Inputs ── */}
+                    <Pan>
+                      <Lbl>{st.ticker||`Stock ${si+1}`} · ${price} · {contracts} contracts ({shares} shares)</Lbl>
+
+                      <div style={{fontSize:10,color:"#c8a84b",letterSpacing:"0.1em",marginBottom:8,paddingBottom:4,borderBottom:"1px solid #1a2a3a"}}>COLLAR PARAMETERS (30–45 DTE)</div>
+                      <SliderRow label="Long put OTM %" stateKey="longPutOtmPct" min={1} max={15} step={0.5} fmt={v=>`${v}%`} note="Symmetric call strike auto-calculated" />
+                      <SliderRow label="Collar DTE" stateKey="collarDte" min={21} max={90} step={1} fmt={v=>`${v} days`} />
+                      <SliderRow label="Collar cycles / year" stateKey="cyclesPerYear" min={4} max={24} step={1} fmt={v=>`${v}×`} note="12 = monthly, 24 = bi-monthly" />
+
+                      <div style={{fontSize:10,color:"#8b6fd4",letterSpacing:"0.1em",marginBottom:8,paddingBottom:4,borderBottom:"1px solid #1a2a3a",marginTop:14}}>SPREAD LEG (14–21 DTE)</div>
+                      <SliderRow label="Short put spread DTE" stateKey="spreadDte" min={7} max={30} step={1} fmt={v=>`${v} days`} />
+                      <SliderRow label="Spread width ($)" stateKey="spreadWidth" min={1} max={20} step={1} fmt={v=>`$${v}`} note="$ between long put and short put below" />
+                      <SliderRow label="Spread cycles / year" stateKey="spreadCyclesPerYear" min={12} max={52} step={1} fmt={v=>`${v}×`} note="26 = bi-weekly" />
+
+                      <div style={{fontSize:10,color:"#4a6a8a",letterSpacing:"0.1em",marginBottom:8,paddingBottom:4,borderBottom:"1px solid #1a2a3a",marginTop:14}}>IMPLIED VOLATILITY INPUTS</div>
+                      <SliderRow label="Long put IV" stateKey="longPutIv" min={0.10} max={0.60} step={0.01} fmt={v=>`${(v*100).toFixed(0)}%`} note="Use current stock IV from your broker" />
+                      <SliderRow label="Short call IV" stateKey="shortCallIv" min={0.10} max={0.60} step={0.01} fmt={v=>`${(v*100).toFixed(0)}%`} />
+                      <SliderRow label="Short put (spread) IV" stateKey="shortPutIv" min={0.10} max={0.60} step={0.01} fmt={v=>`${(v*100).toFixed(0)}%`} />
+                    </Pan>
+
+                    {/* ── Right: Analytics ── */}
+                    <div>
+                      {/* Strike map */}
+                      <Pan style={{marginBottom:12}}>
+                        <Lbl>STRIKE MAP — {st.ticker||"STOCK"} @ ${price}</Lbl>
+                        <div style={{position:"relative",padding:"0 0 0 110px",marginBottom:4}}>
+                          {[
+                            {label:"Short Call",strike:collarCallStrike,color:"#c8a84b",side:"sell",note:`+$${collarCallStrike-price} above`},
+                            {label:"Stock Price",strike:price,color:"#f0f8ff",side:"ref",note:"current"},
+                            {label:"Long Put",strike:longPutStrike,color:"#cc3333",side:"buy",note:`${inp.longPutOtmPct}% OTM`},
+                            {label:"Short Put",strike:shortPutStrike,color:"#8b6fd4",side:"sell",note:`$${spreadWidth} below long put`},
+                          ].map((s,i) => (
+                            <div key={i} style={{display:"grid",gridTemplateColumns:"110px 1fr 80px 90px",gap:6,alignItems:"center",padding:"7px 0",borderBottom:"1px solid #1a2a3a"}}>
+                              <span style={{fontSize:10,color:s.color,fontWeight:"700",fontFamily:"monospace"}}>{s.label}</span>
+                              <div style={{height:2,background:s.color,opacity:s.side==="ref"?0.3:0.7,borderRadius:1}} />
+                              <span style={{fontSize:13,fontWeight:"700",color:s.color,fontFamily:"monospace",textAlign:"right"}}>${s.strike.toLocaleString()}</span>
+                              <span style={{fontSize:9,color:"#4a6a8a",textAlign:"right"}}>{s.note}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Per-leg premium */}
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:12}}>
+                          {[
+                            {label:"Long Put Cost",value:`−${fmt(longPutCost)}`,sub:`$${longPutCostPerShare.toFixed(2)}/share`,color:"#cc3333"},
+                            {label:"Short Call Premium",value:`+${fmt(shortCallPrem)}`,sub:`$${shortCallPremPerShare.toFixed(2)}/share`,color:"#c8a84b"},
+                            {label:"Collar Net/cycle",value:(collarNetPerCycle>=0?"+":"")+fmt(collarNetPerCycle),sub:collarNetPerCycle>=0?"Net credit":"Net debit",color:collarNetPerCycle>=0?"#3aaa6a":"#e87a7a"},
+                          ].map((m,i) => (
+                            <div key={i} style={{background:"#06101a",borderRadius:4,padding:"8px 10px",borderTop:`2px solid ${m.color}`}}>
+                              <div style={{fontSize:9,color:"#3a6a8a",marginBottom:3}}>{m.label}</div>
+                              <div style={{fontSize:14,fontWeight:"700",color:m.color,fontFamily:"monospace"}}>{m.value}</div>
+                              <div style={{fontSize:9,color:"#2a5a6a",marginTop:2}}>{m.sub}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </Pan>
+
+                      {/* Spread leg */}
+                      <Pan style={{marginBottom:12}}>
+                        <Lbl>SPREAD LEG — SHORT PUT @ ${shortPutStrike} / LONG PUT @ ${longPutStrike}</Lbl>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
+                          {[
+                            {label:"Short Put Premium",value:`+${fmt(shortPutPrem)}`,sub:`$${shortPutPremPerShare.toFixed(2)}/share`,color:"#3aaa6a"},
+                            {label:"Max Loss (spread)",value:fmt(maxLossSpread),sub:`$${spreadWidth} × ${contracts} contracts`,color:"#e87a7a"},
+                            {label:"Collateral Required",value:fmt(maxLossSpread),sub:"Spread width × contracts",color:"#8b6fd4"},
+                            {label:"Spread R/R",value:`1 : ${(shortPutPrem / Math.max(maxLossSpread - shortPutPrem, 1)).toFixed(2)}`,sub:"Income : max risk",color:"#c8a84b"},
+                          ].map((m,i) => (
+                            <div key={i} style={{background:"#06101a",borderRadius:4,padding:"8px 10px"}}>
+                              <div style={{fontSize:9,color:"#3a6a8a",marginBottom:3}}>{m.label}</div>
+                              <div style={{fontSize:13,fontWeight:"700",color:m.color,fontFamily:"monospace"}}>{m.value}</div>
+                              <div style={{fontSize:9,color:"#2a5a6a",marginTop:2}}>{m.sub}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </Pan>
+
+                      {/* Delta summary */}
+                      <Pan style={{marginBottom:12}}>
+                        <Lbl>DELTA SUMMARY — NET POSITION</Lbl>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:10,marginBottom:10}}>
+                          {[
+                            {label:`Stock (${shares} sh)`,value:`+${fmtNum(deltaStock)}`,color:"#4a9fd4"},
+                            {label:"Long Put delta",value:fmtNum(deltaLongPut),color:"#cc3333"},
+                            {label:"Short Call delta",value:fmtNum(deltaShortCall),color:"#e87a00"},
+                            {label:"Short Put delta",value:`+${fmtNum(deltaShortPut)}`,color:"#3aaa6a"},
+                          ].map((d,i) => (
+                            <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 10px",background:"#06101a",borderRadius:4}}>
+                              <span style={{fontSize:11,color:"#5a7a8a"}}>{d.label}</span>
+                              <span style={{fontSize:12,fontWeight:"700",color:d.color,fontFamily:"monospace"}}>{d.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{padding:"10px 12px",background:"#0a2a18",borderRadius:4,borderLeft:"3px solid #3aaa6a",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                          <div>
+                            <div style={{fontSize:10,color:"#3aaa6a",marginBottom:2}}>NET DELTA</div>
+                            <div style={{fontSize:20,fontWeight:"700",color:"#f0f8ff",fontFamily:"monospace"}}>+{fmtNum(netDelta)}</div>
+                          </div>
+                          <div style={{textAlign:"right"}}>
+                            <div style={{fontSize:10,color:"#3aaa6a",marginBottom:2}}>DELTA REDUCTION</div>
+                            <div style={{fontSize:20,fontWeight:"700",color:"#c8a84b"}}>{deltaReductionPct.toFixed(1)}%</div>
+                          </div>
+                        </div>
+                        <div style={{fontSize:10,color:"#2a5a6a",marginTop:6,lineHeight:1.6}}>
+                          Net delta of +{fmtNum(netDelta)} means a $1 move in {st.ticker||"the stock"} moves this position by ~${fmtNum(netDelta)} (vs ${fmtNum(deltaStock)} unhedged). Your effective exposure is reduced by {deltaReductionPct.toFixed(0)}%.
+                        </div>
+                      </Pan>
+                    </div>
+                  </div>
+
+                  {/* Annual income summary */}
+                  <Pan style={{marginBottom:16}}>
+                    <Lbl>ANNUAL INCOME PROJECTION — {st.ticker||`STOCK ${si+1}`}</Lbl>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+                      {[
+                        {label:`Collar net (${inp.cyclesPerYear}× / yr)`,value:fmt(collarNetAnnual),color:collarNetAnnual>=0?"#3aaa6a":"#e87a7a"},
+                        {label:`Spread income (${inp.spreadCyclesPerYear}× / yr)`,value:`+${fmt(spreadIncomeAnnual)}`,color:"#8b6fd4"},
+                        {label:"Less commissions",value:`−${fmt(commAnnual)}`,color:"#e87a7a"},
+                        {label:"Net annual income",value:fmt(totalAnnualNet),color:"#c8a84b"},
+                      ].map((m,i) => (
+                        <div key={i} style={{background:"#0a1a28",borderRadius:6,padding:"12px 14px",borderTop:`2px solid ${m.color}`}}>
+                          <div style={{fontSize:9,color:"#3a6a8a",marginBottom:4}}>{m.label}</div>
+                          <div style={{fontSize:18,fontWeight:"700",color:m.color,fontFamily:"monospace"}}>{m.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+                      {[
+                        {label:"Yield on position value",value:`${yieldOnPosition.toFixed(1)}%`,color:"#c8a84b"},
+                        {label:"Position value",value:fmt(price*shares),color:"#4a9fd4"},
+                        {label:"Spread collateral",value:fmt(maxLossSpread),color:"#8b6fd4"},
+                        {label:"vs. naked CC income",value:fmt(gsCallGross / Math.max(STOCKS.reduce((s,st)=>s+Math.floor((Number(st.unrestrictedShares)||0)/100),0),1) * contracts),color:"#5a7a8a"},
+                      ].map((m,i) => (
+                        <div key={i} style={{padding:"6px 12px",background:"#06101a",borderRadius:4,fontSize:11,fontFamily:"monospace"}}>
+                          <span style={{color:"#3a6a8a"}}>{m.label}: </span>
+                          <span style={{color:m.color,fontWeight:"700"}}>{m.value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </Pan>
+
+                  {/* Payoff table */}
+                  <Pan>
+                    <Lbl>PAYOFF AT EXPIRY — COMBINED POSITION</Lbl>
+                    <div style={{overflowX:"auto"}}>
+                      <table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontFamily:"monospace"}}>
+                        <thead>
+                          <tr style={{color:"#2a5a6a"}}>
+                            {["Scenario","Stock P&L","Long Put","Short Call","Short Put","TOTAL"].map(h=>(
+                              <th key={h} style={{padding:"8px 10px",textAlign:"right",borderBottom:"1px solid #1a2a3a",fontWeight:"400",firstChild:{textAlign:"left"}}}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {scenarios.map((sc,i) => (
+                            <tr key={i} style={{background: i%2===0?"#0a1a28":"#060f1a"}}>
+                              <td style={{padding:"8px 10px",color:"#7a9ab0",textAlign:"left"}}>{sc.label}</td>
+                              <td style={{padding:"8px 10px",textAlign:"right",color:sc.stockPnl>=0?"#3aaa6a":"#e87a7a"}}>{sc.stockPnl>=0?"+":""}{fmt(sc.stockPnl)}</td>
+                              <td style={{padding:"8px 10px",textAlign:"right",color:sc.longPutNet>=0?"#3aaa6a":"#e87a7a"}}>{sc.longPutNet>=0?"+":""}{fmt(sc.longPutNet)}</td>
+                              <td style={{padding:"8px 10px",textAlign:"right",color:sc.shortCallNet>=0?"#3aaa6a":"#e87a7a"}}>{sc.shortCallNet>=0?"+":""}{fmt(sc.shortCallNet)}</td>
+                              <td style={{padding:"8px 10px",textAlign:"right",color:sc.shortPutNet>=0?"#3aaa6a":"#e87a7a"}}>{sc.shortPutNet>=0?"+":""}{fmt(sc.shortPutNet)}</td>
+                              <td style={{padding:"8px 10px",textAlign:"right",fontWeight:"700",color:sc.total>=0?"#c8a84b":"#e87a7a"}}>{sc.total>=0?"+":""}{fmt(sc.total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{fontSize:10,color:"#2a5a6a",marginTop:8,lineHeight:1.6}}>
+                      Premium estimates use simplified Black-Scholes approximation. Verify actual quotes in your options chain before trading. IV inputs above let you tune to current market conditions.
+                    </div>
+                  </Pan>
+                </div>
+              );
+            })}
           </div>
         )}
 
