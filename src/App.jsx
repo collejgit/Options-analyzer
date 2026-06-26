@@ -1,3 +1,212 @@
+
+// ─── TRAINING STRUCTURES ─────────────────────────────────────────
+const TRAINING_STRUCTURES = [
+  {
+    id: "long_call",
+    name: "Long Call",
+    emoji: "📈",
+    category: "Basic",
+    tagline: "Bullish bet with defined risk",
+    difficulty: 1,
+    description: "You pay a premium to buy the right (not obligation) to purchase 100 shares at the strike price before expiry. If the stock rises above your break-even, you profit. If it doesn't, you lose only the premium paid — nothing more.",
+    when: "You expect the stock to rise significantly before expiry. Best when implied volatility is LOW (options are cheap).",
+    maxProfit: "Unlimited — stock can rise forever",
+    maxLoss: "Premium paid — 100% of your investment but nothing more",
+    breakeven: "Strike + Premium paid",
+    greeks: "Delta: +0.20 to +0.80 · Theta: negative (hurts you daily) · Vega: positive (rising IV helps)",
+    legs: [{ type: "long_call", strike: 100, premium: 3 }],
+    color: "#3aaa6a",
+    keyInsight: "Theta decay is your enemy. Every day you hold a long call, it loses time value. You need the stock to move — and fast.",
+  },
+  {
+    id: "long_put",
+    name: "Long Put",
+    emoji: "📉",
+    category: "Basic",
+    tagline: "Bearish bet or downside insurance",
+    difficulty: 1,
+    description: "You pay a premium to buy the right to sell 100 shares at the strike price. If the stock falls below your break-even, you profit. Used either to speculate on a decline or to protect (insure) an existing long stock position.",
+    when: "You expect the stock to fall, or you own shares and want to protect against a crash. Best when IV is low.",
+    maxProfit: "Strike − Premium (stock can only go to zero)",
+    maxLoss: "Premium paid",
+    breakeven: "Strike − Premium paid",
+    greeks: "Delta: −0.20 to −0.80 · Theta: negative · Vega: positive",
+    legs: [{ type: "long_put", strike: 100, premium: 3 }],
+    color: "#cc3333",
+    keyInsight: "Long puts are insurance. Like car insurance, they cost money every month and you hope you never need them. The key is not overpaying for coverage.",
+  },
+  {
+    id: "short_put",
+    name: "Cash-Secured Short Put",
+    emoji: "💰",
+    category: "Income",
+    tagline: "Get paid to agree to buy shares cheaper",
+    difficulty: 2,
+    description: "You sell the right to someone else to put (sell) shares to you at the strike price. You collect the premium upfront. If the stock stays above the strike, you keep the premium and do nothing. If it falls below, you buy 100 shares at the strike — but your real cost is strike minus premium.",
+    when: "You're willing to own the stock at the strike price. A great way to buy stocks you want at a discount. The core of the wheel strategy.",
+    maxProfit: "Premium collected — capped at entry",
+    maxLoss: "Strike − Premium (stock goes to zero)",
+    breakeven: "Strike − Premium collected",
+    greeks: "Delta: +0.20 to +0.50 · Theta: positive (works FOR you daily) · Vega: negative (rising IV hurts mark-to-market)",
+    legs: [{ type: "short_put", strike: 100, premium: 3 }],
+    color: "#c8a84b",
+    keyInsight: "This is your primary income strategy. You earn premium for accepting assignment risk. Only sell puts on stocks you genuinely want to own at that price.",
+  },
+  {
+    id: "covered_call",
+    name: "Covered Call",
+    emoji: "🎯",
+    category: "Income",
+    tagline: "Earn income from shares you already own",
+    difficulty: 2,
+    description: "You own 100 shares and sell someone the right to buy them from you at the strike price. You collect the premium. If the stock stays below the strike, you keep the shares AND the premium. If it rises above, your shares get called away at the strike — you miss the extra upside.",
+    when: "You own shares and want to generate income, especially in flat or mildly bullish markets. Part of the wheel strategy after assignment.",
+    maxProfit: "(Strike − Purchase price) + Premium collected",
+    maxLoss: "Purchase price − Premium (stock goes to zero)",
+    breakeven: "Purchase price − Premium collected",
+    greeks: "Delta: roughly +0.50 to +0.80 on combined position · Theta: positive · Vega: negative",
+    legs: [{ type: "long_stock", strike: 97, premium: 0 }, { type: "short_call", strike: 105, premium: 3 }],
+    color: "#4a9fd4",
+    keyInsight: "You cap your upside in exchange for income. The trade-off: if the stock surges to $130, you only participate to $105. But in sideways or slowly rising markets, covered calls dramatically outperform simply holding.",
+  },
+  {
+    id: "protective_put",
+    name: "Protective Put",
+    emoji: "🛡️",
+    category: "Hedging",
+    tagline: "Insurance policy for your shares",
+    difficulty: 2,
+    description: "You own shares and buy a put to protect against a crash. Similar to buying insurance. The put limits your downside to the strike price while keeping all the upside. You pay the premium as an insurance cost.",
+    when: "You hold a large stock position (like a concentrated GS position) and want crash protection, especially heading into uncertain events.",
+    maxProfit: "Unlimited upside on the stock",
+    maxLoss: "(Stock price − Strike) + Premium paid",
+    breakeven: "Stock purchase price + Premium paid",
+    greeks: "Net delta reduced by long put delta · Theta: negative (insurance costs money daily) · Vega: positive",
+    legs: [{ type: "long_stock", strike: 97, premium: 0 }, { type: "long_put", strike: 95, premium: 3 }],
+    color: "#8b6fd4",
+    keyInsight: "Protective puts are expensive long-term. The classic alternative: sell covered calls to fund the protective put — that's the collar.",
+  },
+  {
+    id: "collar",
+    name: "Collar",
+    emoji: "🔗",
+    category: "Hedging",
+    tagline: "Free (or cheap) protection by capping upside",
+    difficulty: 3,
+    description: "Own shares + buy a put (protection) + sell a call (to fund it). The call premium offsets the put cost, making the hedge nearly free. Downside is floored at the put strike. Upside is capped at the call strike. Your P&L is 'collared' into a defined range.",
+    when: "You have a large concentrated stock position you can't sell (like restricted shares) but want downside protection. Classic institutional hedging tool.",
+    maxProfit: "(Call strike − Stock price) + Net premium",
+    maxLoss: "(Stock price − Put strike) + Net premium",
+    breakeven: "Stock price + Net premium paid (or minus net credit)",
+    greeks: "Near-zero delta when symmetric · Theta: near zero if self-financing · Vega: near zero",
+    legs: [{ type: "long_stock", strike: 97, premium: 0 }, { type: "long_put", strike: 93, premium: 3 }, { type: "short_call", strike: 107, premium: 3 }],
+    color: "#3aaa6a",
+    keyInsight: "The zero-cost collar is the holy grail of institutional hedging. By making the call strike and put strike equidistant, the collar is self-financing — you get free crash protection by capping your upside.",
+  },
+  {
+    id: "bull_call_spread",
+    name: "Bull Call Spread",
+    emoji: "↗️",
+    category: "Spread",
+    tagline: "Defined risk bullish bet at lower cost",
+    difficulty: 3,
+    description: "Buy a lower-strike call and sell a higher-strike call. The premium from the sold call reduces your total cost. You profit if the stock rises to (or above) the higher strike. Both your profit and loss are capped.",
+    when: "You're moderately bullish but don't want to spend full premium on a naked long call. You accept a profit cap in exchange for a lower entry cost.",
+    maxProfit: "Spread width − Net premium paid",
+    maxLoss: "Net premium paid",
+    breakeven: "Lower strike + Net premium paid",
+    greeks: "Delta: lower than long call alone · Theta: less negative than long call · Vega: reduced",
+    legs: [{ type: "long_call", strike: 100, premium: 5 }, { type: "short_call", strike: 110, premium: 2 }],
+    color: "#3aaa6a",
+    keyInsight: "The sold call reduces your cost basis but caps your gain. If you're very confident the stock will reach $110, you'd just buy the call. The spread is for 'I think it'll get there but maybe not blow past it.'",
+  },
+  {
+    id: "bear_put_spread",
+    name: "Bear Put Spread",
+    emoji: "↘️",
+    category: "Spread",
+    tagline: "Defined risk bearish bet at lower cost",
+    difficulty: 3,
+    description: "Buy a higher-strike put and sell a lower-strike put. The sold put reduces your cost. You profit if the stock falls to (or below) the lower strike. Both profit and loss are defined.",
+    when: "You expect a moderate decline but not a crash. The sold lower put reduces cost while you give up extreme downside profits.",
+    maxProfit: "Spread width − Net premium paid",
+    maxLoss: "Net premium paid",
+    breakeven: "Higher strike − Net premium paid",
+    greeks: "Delta: negative (bearish) · Less sensitive than naked long put · Vega: reduced",
+    legs: [{ type: "long_put", strike: 100, premium: 5 }, { type: "short_put", strike: 90, premium: 2 }],
+    color: "#cc3333",
+    keyInsight: "Like the bull call spread but bearish. The spread width is your max gain. If SPY is at $735 and you buy the $720/$700 bear put spread for $3, you risk $300 to make up to $1,700 if SPY falls to $700.",
+  },
+  {
+    id: "bull_put_spread",
+    name: "Bull Put Spread (Credit Spread)",
+    emoji: "💵",
+    category: "Income",
+    tagline: "Collect premium with defined downside",
+    difficulty: 3,
+    description: "Sell a higher-strike put and buy a lower-strike put. You COLLECT net premium (credit). You keep it all if the stock stays above the higher strike. Max loss is the spread width minus premium collected. Fidelity requires only the spread width as collateral — not full notional.",
+    when: "You're neutral to bullish and want to generate income with defined risk. The SHORT side of your collar wheel strategy. Replaces cash-secured puts with lower capital requirements.",
+    maxProfit: "Net premium collected",
+    maxLoss: "Spread width − Premium collected",
+    breakeven: "Short strike − Net premium collected",
+    greeks: "Delta: positive (benefits from stock rising or staying flat) · Theta: positive · Vega: negative",
+    legs: [{ type: "short_put", strike: 100, premium: 5 }, { type: "long_put", strike: 90, premium: 2 }],
+    color: "#c8a84b",
+    keyInsight: "This is the most capital-efficient income structure. A $10-wide bull put spread on 1 contract requires $1,000 in collateral (not $10,000 cash-secured). That's 10× capital efficiency. The trade-off: your max profit is capped at the premium collected.",
+  },
+  {
+    id: "iron_condor",
+    name: "Iron Condor",
+    emoji: "🦅",
+    category: "Advanced",
+    tagline: "Profit from a stock that goes nowhere",
+    difficulty: 4,
+    description: "Combine a bull put spread BELOW the stock and a bear call spread ABOVE it. You collect premium from both sides. As long as the stock stays between the two inner strikes at expiry, you keep the full premium. You lose if the stock moves too far in either direction.",
+    when: "You expect the stock to trade in a range — low volatility, no major news. Best entered when IV is high (premium is rich) and you expect volatility to contract.",
+    maxProfit: "Total net premium collected from both spreads",
+    maxLoss: "Spread width − Total premium collected (same on both sides)",
+    breakeven: "Two break-even points: Short put − Premium and Short call + Premium",
+    greeks: "Delta: near zero · Theta: positive (time decay benefits) · Vega: negative (falling IV benefits)",
+    legs: [{ type: "long_put", strike: 85, premium: 1 }, { type: "short_put", strike: 92, premium: 3 }, { type: "short_call", strike: 108, premium: 3 }, { type: "long_call", strike: 115, premium: 1 }],
+    color: "#8b6fd4",
+    keyInsight: "The iron condor is a volatility short. You're not predicting direction — you're betting the stock stays in a range. It works most of the time (stocks are range-bound ~60–70% of the time) but when it fails, the loss can equal the spread width.",
+  },
+  {
+    id: "straddle",
+    name: "Long Straddle",
+    emoji: "🎪",
+    category: "Advanced",
+    tagline: "Profit from a big move — in either direction",
+    difficulty: 4,
+    description: "Buy both a call AND a put at the same strike and expiry. You don't care which direction the stock moves — you just need it to move a LOT. The stock must move more than the total premium paid to be profitable. Often used before earnings announcements.",
+    when: "You expect a big move (earnings, FDA approval, merger news) but don't know the direction. Best when IV is LOW — you want to buy before the implied move expands.",
+    maxProfit: "Unlimited (stock moves far in either direction)",
+    maxLoss: "Total premium paid (both call and put)",
+    breakeven: "Two break-evens: Strike − Total premium and Strike + Total premium",
+    greeks: "Delta: near zero · Theta: very negative (expensive to hold) · Vega: very positive (benefits from IV spike)",
+    legs: [{ type: "long_call", strike: 100, premium: 4 }, { type: "long_put", strike: 100, premium: 4 }],
+    color: "#e87a00",
+    keyInsight: "Straddles are expensive. You're paying for optionality in both directions. The stock needs to move MORE than the market expects (the implied move) for you to profit. If you buy before earnings and the stock moves less than expected, you lose — even if it moved.",
+  },
+  {
+    id: "wheel",
+    name: "The Wheel Strategy",
+    emoji: "⚙️",
+    category: "Income",
+    tagline: "Systematic premium collection — your core strategy",
+    difficulty: 3,
+    description: "Step 1: Sell cash-secured puts on a stock you want to own. Collect premium. Step 2: If assigned, you now own 100 shares at your cost basis (strike minus premium). Step 3: Immediately sell covered calls at or above your cost basis. Collect more premium. Step 4: If called away, start again from Step 1. The 'wheel' keeps spinning, collecting premium at each turn.",
+    when: "Ideal for moderately bullish stocks you're comfortable owning long-term. Works best in range-bound to slowly trending markets. Your primary strategy on SPY.",
+    maxProfit: "Continuous premium income — theoretically unlimited over time",
+    maxLoss: "Stock goes to zero minus all premium collected (same as owning stock)",
+    breakeven: "Put strike − Put premium − Call premium collected",
+    greeks: "Dynamic — shifts between short put (before assignment) and covered call (after assignment)",
+    legs: [{ type: "short_put", strike: 97, premium: 2 }, { type: "long_stock", strike: 95, premium: 0 }, { type: "short_call", strike: 102, premium: 2 }],
+    color: "#4a9fd4",
+    keyInsight: "The wheel only works on stocks you genuinely want to own at the put strike. If you sell puts on a falling stock just for premium, you'll get assigned into a losing position. Quality of the underlying matters more than the premium amount.",
+  },
+];
+
 import { useState } from "react";
 
 // ─── VIX REGIME DATA (static, not user-parameterized) ─────────────
@@ -537,6 +746,11 @@ function Dashboard({ params, onReset, onClearData }) {
   });
   const [activeCollarStock, setActiveCollarStock] = useState(0);
 
+  // Training state
+  const [trainingCategory, setTrainingCategory] = useState("All");
+  const [activeStructure, setActiveStructure] = useState("long_call");
+  const [trainingSlider, setTrainingSlider] = useState(100); // stock price for payoff diagram
+
   // Derived income
   const spyGross = premSlider * 100 * contracts * CYCLES * 52;
   const commissions = contracts * 0.65 * CYCLES * 52;
@@ -579,6 +793,7 @@ function Dashboard({ params, onReset, onClearData }) {
     {id:"roll",label:"Roll Rules"},
     {id:"itm",label:"ITM Decisions"},
     {id:"collar",label:"Collar Wheel"},
+    {id:"training",label:"Options Training"},
   ];
 
   const sev = {critical:"#cc3333",high:"#e87a00",medium:"#c8a84b",low:"#3aaa6a",opportunity:"#4a9fd4"};
@@ -1600,6 +1815,359 @@ function Dashboard({ params, onReset, onClearData }) {
             </div>
           </div>
         )}
+
+        {/* ═══ OPTIONS TRAINING ═══ */}
+        {section === "training" && (() => {
+          const categories = ["All", "Basic", "Income", "Hedging", "Spread", "Advanced"];
+          const filtered = trainingCategory === "All"
+            ? TRAINING_STRUCTURES
+            : TRAINING_STRUCTURES.filter(s => s.category === trainingCategory);
+          const active = TRAINING_STRUCTURES.find(s => s.id === activeStructure) || TRAINING_STRUCTURES[0];
+
+          // ── Payoff calculator ──
+          const S = trainingSlider; // current stock price in diagram (centered on 100)
+          const calcPayoff = (legs, S) => {
+            return legs.reduce((total, leg) => {
+              const { type, strike, premium } = leg;
+              if (type === "long_call")  return total + Math.max(0, S - strike) - premium;
+              if (type === "short_call") return total + premium - Math.max(0, S - strike);
+              if (type === "long_put")   return total + Math.max(0, strike - S) - premium;
+              if (type === "short_put")  return total + premium - Math.max(0, strike - S);
+              if (type === "long_stock") return total + (S - strike); // strike = purchase price
+              return total;
+            }, 0);
+          };
+
+          // Build payoff curve points
+          const prices = Array.from({ length: 61 }, (_, i) => 70 + i);
+          const payoffs = prices.map(p => calcPayoff(active.legs, p));
+          const maxPayoff = Math.max(...payoffs);
+          const minPayoff = Math.min(...payoffs);
+          const range = Math.max(Math.abs(maxPayoff), Math.abs(minPayoff), 5);
+
+          // SVG dimensions
+          const W = 520, H = 220, PAD = { t: 20, r: 20, b: 40, l: 56 };
+          const chartW = W - PAD.l - PAD.r;
+          const chartH = H - PAD.t - PAD.b;
+          const xScale = (p) => PAD.l + ((p - 70) / 60) * chartW;
+          const yScale = (v) => PAD.t + chartH / 2 - (v / range) * (chartH / 2) * 0.85;
+
+          // Build SVG path
+          const pathD = payoffs.map((v, i) =>
+            `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${yScale(v).toFixed(1)}`
+          ).join(" ");
+
+          // Current payoff value
+          const currentPayoff = calcPayoff(active.legs, S);
+          const breakevens = [];
+          for (let i = 1; i < payoffs.length; i++) {
+            if ((payoffs[i-1] < 0 && payoffs[i] >= 0) || (payoffs[i-1] >= 0 && payoffs[i] < 0)) {
+              const bep = prices[i-1] + (0 - payoffs[i-1]) / (payoffs[i] - payoffs[i-1]);
+              breakevens.push(Math.round(bep * 10) / 10);
+            }
+          }
+
+          return (
+            <div>
+              <SH title="Options Strategy Training" sub="12 core structures · Interactive payoff diagrams · Novice to advanced" />
+
+              {/* Category filter */}
+              <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+                {categories.map(cat => (
+                  <button key={cat} onClick={() => setTrainingCategory(cat)} style={{
+                    padding: "6px 14px",
+                    background: trainingCategory === cat ? "#4a9fd4" : "#0a1a28",
+                    color: trainingCategory === cat ? "#fff" : "#4a9fd4",
+                    border: "2px solid #4a9fd4", borderRadius: 4, cursor: "pointer",
+                    fontFamily: "monospace", fontSize: 10, fontWeight: "700",
+                  }}>{cat}</button>
+                ))}
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 9, color: "#2a5a6a" }}>DIFFICULTY:</div>
+                  {[1,2,3,4].map(d => (
+                    <div key={d} style={{ width: 10, height: 10, borderRadius: "50%", background: "#c8a84b", opacity: 0.3 + d * 0.175 }} />
+                  ))}
+                  <div style={{ fontSize: 9, color: "#2a5a6a" }}>= advanced</div>
+                </div>
+              </div>
+
+              {/* Strategy grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 24 }}>
+                {filtered.map(s => (
+                  <button key={s.id} onClick={() => { setActiveStructure(s.id); setTrainingSlider(100); }} style={{
+                    padding: "10px 12px", textAlign: "left", cursor: "pointer",
+                    background: activeStructure === s.id ? s.color + "25" : "#0a1a28",
+                    border: `2px solid ${activeStructure === s.id ? s.color : "#1a2a3a"}`,
+                    borderRadius: 6, fontFamily: "monospace",
+                  }}>
+                    <div style={{ fontSize: 16, marginBottom: 4 }}>{s.emoji}</div>
+                    <div style={{ fontSize: 11, fontWeight: "700", color: activeStructure === s.id ? s.color : "#d0dde8", marginBottom: 2 }}>{s.name}</div>
+                    <div style={{ fontSize: 9, color: "#3a6a8a", marginBottom: 6 }}>{s.tagline}</div>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: s.color + "20", color: s.color }}>{s.category}</span>
+                      <div style={{ display: "flex", gap: 1, marginLeft: "auto" }}>
+                        {[1,2,3,4].map(d => (
+                          <div key={d} style={{ width: 5, height: 5, borderRadius: "50%", background: d <= s.difficulty ? s.color : "#1a2a3a" }} />
+                        ))}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Active strategy detail */}
+              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16 }}>
+
+                {/* Left: explanation */}
+                <div>
+                  <Pan style={{ marginBottom: 12 }}>
+                    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 14 }}>
+                      <div style={{ fontSize: 32 }}>{active.emoji}</div>
+                      <div>
+                        <div style={{ fontSize: 18, fontWeight: "700", color: active.color, marginBottom: 3 }}>{active.name}</div>
+                        <div style={{ fontSize: 11, color: "#5a7a8a" }}>{active.tagline}</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: active.color + "20", color: active.color }}>{active.category}</span>
+                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: "#1a2a3a", color: "#4a6a8a" }}>
+                            {'●'.repeat(active.difficulty) + '○'.repeat(4 - active.difficulty)} difficulty
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: 12, color: "#8a9ab0", lineHeight: 1.8, marginBottom: 14, padding: "10px 12px", background: "#06101a", borderRadius: 4 }}>
+                      {active.description}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                      {[
+                        { label: "USE WHEN", value: active.when, color: "#4a9fd4" },
+                        { label: "GREEKS", value: active.greeks, color: "#8b6fd4" },
+                        { label: "MAX PROFIT", value: active.maxProfit, color: "#3aaa6a" },
+                        { label: "MAX LOSS", value: active.maxLoss, color: "#e87a7a" },
+                        { label: "BREAK-EVEN", value: active.breakeven, color: "#c8a84b" },
+                      ].map((r, i) => (
+                        <div key={i} style={{ padding: "8px 10px", background: "#06101a", borderRadius: 4, borderLeft: `3px solid ${r.color}`, gridColumn: i === 0 || i === 1 ? "span 1" : i === 4 ? "span 2" : "span 1" }}>
+                          <div style={{ fontSize: 9, color: r.color, letterSpacing: "0.1em", marginBottom: 4 }}>{r.label}</div>
+                          <div style={{ fontSize: 11, color: "#a0b8c8", lineHeight: 1.6 }}>{r.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div style={{ padding: "10px 14px", background: "#0d2a10", borderRadius: 4, borderLeft: "3px solid #3aaa6a" }}>
+                      <div style={{ fontSize: 9, color: "#3aaa6a", letterSpacing: "0.1em", marginBottom: 4 }}>💡 KEY INSIGHT</div>
+                      <div style={{ fontSize: 12, color: "#80b890", lineHeight: 1.7 }}>{active.keyInsight}</div>
+                    </div>
+                  </Pan>
+
+                  {/* Leg structure table */}
+                  <Pan>
+                    <Lbl>STRUCTURE — LEGS AT A GLANCE</Lbl>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
+                        <thead>
+                          <tr style={{ color: "#2a5a6a" }}>
+                            {["Leg", "Action", "Type", "Strike*", "Premium*"].map(h => (
+                              <th key={h} style={{ padding: "6px 10px", textAlign: "left", borderBottom: "1px solid #1a2a3a", fontWeight: "400" }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {active.legs.map((leg, i) => {
+                            const isLong = leg.type.startsWith("long");
+                            const isSell = leg.type.startsWith("short");
+                            const typeLabel = leg.type.replace("long_", "").replace("short_", "").replace("_", " ");
+                            return (
+                              <tr key={i} style={{ background: i % 2 === 0 ? "#06101a" : "#040c14" }}>
+                                <td style={{ padding: "8px 10px", color: "#5a7a8a" }}>#{i + 1}</td>
+                                <td style={{ padding: "8px 10px", color: isLong ? "#3aaa6a" : isSell ? "#e87a7a" : "#c8a84b", fontWeight: "700" }}>
+                                  {isLong ? "BUY" : isSell ? "SELL" : "HOLD"}
+                                </td>
+                                <td style={{ padding: "8px 10px", color: "#d0dde8", textTransform: "capitalize" }}>{typeLabel}</td>
+                                <td style={{ padding: "8px 10px", color: "#c8a84b" }}>${leg.strike}</td>
+                                <td style={{ padding: "8px 10px", color: leg.premium > 0 ? (isLong ? "#e87a7a" : "#3aaa6a") : "#5a7a8a" }}>
+                                  {leg.premium > 0 ? (isLong ? `−$${leg.premium}` : `+$${leg.premium}`) : "—"}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          <tr style={{ background: "#0a1a28" }}>
+                            <td colSpan={3} style={{ padding: "8px 10px", color: "#4a6a8a" }}>Net premium per share</td>
+                            <td colSpan={2} style={{ padding: "8px 10px", fontWeight: "700" }}>
+                              {(() => {
+                                const net = active.legs.reduce((s, l) => {
+                                  if (l.type.startsWith("short")) return s + l.premium;
+                                  if (l.type.startsWith("long") && l.type !== "long_stock") return s - l.premium;
+                                  return s;
+                                }, 0);
+                                return (
+                                  <span style={{ color: net >= 0 ? "#3aaa6a" : "#e87a7a" }}>
+                                    {net >= 0 ? "+" : ""}${net.toFixed(2)} {net >= 0 ? "(net credit)" : "(net debit)"}
+                                  </span>
+                                );
+                              })()}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ fontSize: 9, color: "#2a4a5a", marginTop: 6 }}>*Example values for illustration. All figures per share; 1 contract = 100 shares.</div>
+                  </Pan>
+                </div>
+
+                {/* Right: payoff diagram */}
+                <div>
+                  <Pan style={{ marginBottom: 12 }}>
+                    <Lbl>PAYOFF DIAGRAM AT EXPIRY</Lbl>
+
+                    {/* SVG Payoff Chart */}
+                    <div style={{ overflowX: "auto" }}>
+                      <svg width={W} height={H} style={{ display: "block" }}>
+                        {/* Grid lines */}
+                        {[-range*0.85, -range*0.425, 0, range*0.425, range*0.85].map((v, i) => (
+                          <g key={i}>
+                            <line x1={PAD.l} y1={yScale(v)} x2={W - PAD.r} y2={yScale(v)}
+                              stroke={v === 0 ? "#2a4a5a" : "#0f1e2e"} strokeWidth={v === 0 ? 1.5 : 1} />
+                            <text x={PAD.l - 6} y={yScale(v) + 4} textAnchor="end"
+                              fill="#2a5a6a" fontSize={9} fontFamily="monospace">
+                              {v === 0 ? "0" : (v > 0 ? "+" : "") + Math.round(v)}
+                            </text>
+                          </g>
+                        ))}
+
+                        {/* X axis labels */}
+                        {[75, 85, 95, 100, 105, 115, 125].map(p => (
+                          <text key={p} x={xScale(p)} y={H - PAD.b + 14}
+                            textAnchor="middle" fill="#2a5a6a" fontSize={9} fontFamily="monospace">${p}</text>
+                        ))}
+
+                        {/* Zero line highlighted */}
+                        <line x1={PAD.l} y1={yScale(0)} x2={W - PAD.r} y2={yScale(0)}
+                          stroke="#1e3a50" strokeWidth={1} />
+
+                        {/* Break-even vertical lines */}
+                        {breakevens.map((bep, i) => (
+                          <g key={i}>
+                            <line x1={xScale(bep)} y1={PAD.t} x2={xScale(bep)} y2={H - PAD.b}
+                              stroke="#c8a84b" strokeWidth={1} strokeDasharray="4,3" />
+                            <text x={xScale(bep)} y={PAD.t + 10} textAnchor="middle"
+                              fill="#c8a84b" fontSize={8} fontFamily="monospace">B/E ${bep}</text>
+                          </g>
+                        ))}
+
+                        {/* Profit/loss fill areas */}
+                        {(() => {
+                          const zeroY = yScale(0);
+                          // Profit area (above zero)
+                          const profitPath = payoffs.map((v, i) =>
+                            `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${Math.min(yScale(v), zeroY).toFixed(1)}`
+                          ).join(" ") + ` L ${xScale(prices[prices.length-1])} ${zeroY} L ${xScale(prices[0])} ${zeroY} Z`;
+                          // Loss area (below zero)
+                          const lossPath = payoffs.map((v, i) =>
+                            `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${Math.max(yScale(v), zeroY).toFixed(1)}`
+                          ).join(" ") + ` L ${xScale(prices[prices.length-1])} ${zeroY} L ${xScale(prices[0])} ${zeroY} Z`;
+                          return (
+                            <>
+                              <path d={profitPath} fill="#3aaa6a" fillOpacity={0.12} />
+                              <path d={lossPath} fill="#cc3333" fillOpacity={0.12} />
+                            </>
+                          );
+                        })()}
+
+                        {/* Payoff curve */}
+                        <path d={pathD} fill="none" stroke={active.color} strokeWidth={2.5} />
+
+                        {/* Current price indicator (slider) */}
+                        <line x1={xScale(S)} y1={PAD.t} x2={xScale(S)} y2={H - PAD.b}
+                          stroke="#f0f8ff" strokeWidth={1} strokeOpacity={0.5} strokeDasharray="3,3" />
+                        <circle cx={xScale(S)} cy={yScale(currentPayoff)}
+                          r={5} fill={currentPayoff >= 0 ? "#3aaa6a" : "#cc3333"} stroke="#f0f8ff" strokeWidth={1.5} />
+                        {/* P&L label near dot */}
+                        <rect x={xScale(S) + (S > 115 ? -56 : 8)} y={yScale(currentPayoff) - 11} width={48} height={16} rx={3}
+                          fill="#0a1a28" stroke={currentPayoff >= 0 ? "#3aaa6a" : "#cc3333"} strokeWidth={1} />
+                        <text x={xScale(S) + (S > 115 ? -32 : 32)} y={yScale(currentPayoff) + 1}
+                          textAnchor="middle" fill={currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a"}
+                          fontSize={9} fontFamily="monospace" fontWeight="700">
+                          {currentPayoff >= 0 ? "+" : ""}{currentPayoff.toFixed(1)}
+                        </text>
+
+                        {/* Profit/Loss zone labels */}
+                        {maxPayoff > 0.5 && (
+                          <text x={W - PAD.r - 4} y={PAD.t + 14} textAnchor="end"
+                            fill="#3aaa6a" fontSize={9} fontFamily="monospace" fillOpacity={0.6}>PROFIT</text>
+                        )}
+                        {minPayoff < -0.5 && (
+                          <text x={W - PAD.r - 4} y={H - PAD.b - 6} textAnchor="end"
+                            fill="#cc3333" fontSize={9} fontFamily="monospace" fillOpacity={0.6}>LOSS</text>
+                        )}
+
+                        {/* Axis labels */}
+                        <text x={W / 2} y={H - 2} textAnchor="middle"
+                          fill="#1e3a50" fontSize={9} fontFamily="monospace">Stock Price at Expiry</text>
+                        <text x={10} y={H / 2} textAnchor="middle" transform={`rotate(-90,10,${H/2})`}
+                          fill="#1e3a50" fontSize={9} fontFamily="monospace">P&L per share ($)</text>
+                      </svg>
+                    </div>
+
+                    {/* Slider control */}
+                    <div style={{ marginTop: 8, padding: "8px 0" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                        <span style={{ fontSize: 10, color: "#3a6a8a" }}>Drag to simulate stock price at expiry</span>
+                        <span style={{ fontSize: 13, fontWeight: "700", color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a", fontFamily: "monospace" }}>
+                          Stock ${S} → P&L: {currentPayoff >= 0 ? "+" : ""}{(currentPayoff * 100).toFixed(0)} /contract
+                        </span>
+                      </div>
+                      <input type="range" min={70} max={130} step={1} value={S}
+                        onChange={e => setTrainingSlider(Number(e.target.value))}
+                        style={{ width: "100%", accentColor: active.color }}
+                      />
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1e3a50" }}>
+                        <span>$70 (−30%)</span>
+                        <span>$100 (entry)</span>
+                        <span>$130 (+30%)</span>
+                      </div>
+                    </div>
+                  </Pan>
+
+                  {/* Key stats at current slider value */}
+                  <Pan style={{ marginBottom: 12 }}>
+                    <Lbl>AT CURRENT PRICE (${S})</Lbl>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                      {[
+                        { label: "P&L per share", value: `${currentPayoff >= 0 ? "+" : ""}$${currentPayoff.toFixed(2)}`, color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a" },
+                        { label: "P&L per contract", value: `${currentPayoff >= 0 ? "+" : ""}$${(currentPayoff * 100).toFixed(0)}`, color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a" },
+                        { label: "Break-even(s)", value: breakevens.length > 0 ? breakevens.map(b => `$${b}`).join(", ") : "N/A", color: "#c8a84b" },
+                        { label: "Max profit", value: maxPayoff > 900 ? "Unlimited" : `+$${maxPayoff.toFixed(2)}/sh`, color: "#3aaa6a" },
+                        { label: "Max loss", value: minPayoff < -900 ? "Unlimited" : `$${minPayoff.toFixed(2)}/sh`, color: "#e87a7a" },
+                        { label: "Risk / Reward", value: Math.abs(minPayoff) > 0 ? `1 : ${(maxPayoff / Math.abs(minPayoff)).toFixed(2)}` : "∞", color: "#c8a84b" },
+                      ].map((m, i) => (
+                        <div key={i} style={{ background: "#06101a", borderRadius: 4, padding: "8px 10px" }}>
+                          <div style={{ fontSize: 9, color: "#2a5a6a", marginBottom: 3 }}>{m.label}</div>
+                          <div style={{ fontSize: 13, fontWeight: "700", color: m.color, fontFamily: "monospace" }}>{m.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </Pan>
+
+                  {/* Comparison to other strategies */}
+                  <Pan>
+                    <Lbl>HOW IT FITS YOUR STRATEGY</Lbl>
+                    <div style={{ fontSize: 11, color: "#5a7a8a", lineHeight: 1.8 }}>
+                      {active.id === "short_put" && "This is your primary SPY income vehicle. You run this 5× per week on SPY across 3 DTE rungs. The wheel strategy starts here."}
+                      {active.id === "covered_call" && "Phase 2 of your wheel. After SPY put assignment, you sell covered calls on the assigned shares at or above your cost basis to recover and generate more premium."}
+                      {active.id === "collar" && "Your GS hedge structure. You own 388 shares (200 unrestricted) and can collar the unrestricted portion to reduce single-name risk while funding the hedge with the call."}
+                      {active.id === "bull_put_spread" && "The defined-risk version of your short put. Running bull put spreads instead of cash-secured puts would require less capital per contract but cap your max profit at the premium."}
+                      {active.id === "wheel" && "This is your entire SPY strategy. You're running Phase 1 (short puts) continuously at 1–30 DTE across 3 rungs, and executing Phase 2 (covered calls) on assignment."}
+                      {active.id === "protective_put" && "Relevant for your GS position. Buying puts on GS protects against a sharp decline in your largest holding. The collar strategy funds these puts by selling GS calls simultaneously."}
+                      {active.id === "iron_condor" && "Not currently in your strategy but applicable: if you wanted to run SPY short puts AND short calls simultaneously, that would be a strangle or condor. Higher premium but more complex management."}
+                      {!["short_put","covered_call","collar","bull_put_spread","wheel","protective_put","iron_condor"].includes(active.id) && "Study this structure to deepen your understanding of options pricing and how premium is generated. Each structure represents a different bet on direction, magnitude, and timing of moves."}
+                    </div>
+                  </Pan>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
       </div>
 
