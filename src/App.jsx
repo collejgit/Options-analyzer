@@ -433,7 +433,7 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
   const REQUIRED_NUMERIC = [
     {k:"underlyingPrice", label:"Underlying Price"},
     {k:"totalCash", label:"Total Cash"},
-    {k:"heloc", label:"HELOC"},
+    {k:"heloc", label:"External Collateral"},
     {k:"reservedForOptions", label:"Reserved for Open Puts"},
   ];
   const REQUIRED_TEXT = [
@@ -526,7 +526,7 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
               </div>
               <EntryField label="TOTAL CASH (brokerage)" k="totalCash" prefix="$" note="All cash including settled option proceeds"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
               <EntryField label="RESERVED FOR OPEN PUTS" k="reservedForOptions" prefix="$" note="Fidelity 'Cash reserved for options strategies'"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
-              <EntryField label="HELOC / EXTERNAL BACKSTOP" k="heloc" prefix="$" note="Available credit line for assignment funding"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
+              <EntryField label="EXTERNAL COLLATERAL" k="heloc" prefix="$" note="HELOC, margin line, or other external backstop for assignment funding"  form={form} errors={errors} hasSaved={hasSaved} setForm={setForm} setErrors={setErrors}/>
 
               {/* Derived preview */}
               <div style={{ background: "#06101a", border: "1px solid #1a3a50", borderRadius: 6, padding: "12px 14px", marginTop: 4 }}>
@@ -681,6 +681,360 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
       </div>
     </div>
   );
+}
+
+
+// ─── TRAINING TAB ───────────────────────────────────────────────
+function TrainingTab({ trainingCategory, setTrainingCategory, activeStructure, setActiveStructure, trainingSlider, setTrainingSlider }) {
+const categories = ["All", "Basic", "Income", "Hedging", "Spread", "Advanced"];
+const filtered = trainingCategory === "All"
+  ? TRAINING_STRUCTURES
+  : TRAINING_STRUCTURES.filter(s => s.category === trainingCategory);
+const active = TRAINING_STRUCTURES.find(s => s.id === activeStructure) || TRAINING_STRUCTURES[0];
+
+// ── Payoff calculator ──
+const S = trainingSlider; // current stock price in diagram (centered on 100)
+const calcPayoff = (legs, S) => {
+  return legs.reduce((total, leg) => {
+    const { type, strike, premium } = leg;
+    if (type === "long_call")  return total + Math.max(0, S - strike) - premium;
+    if (type === "short_call") return total + premium - Math.max(0, S - strike);
+    if (type === "long_put")   return total + Math.max(0, strike - S) - premium;
+    if (type === "short_put")  return total + premium - Math.max(0, strike - S);
+    if (type === "long_stock") return total + (S - strike); // strike = purchase price
+    return total;
+  }, 0);
+};
+
+// Build payoff curve points
+const prices = Array.from({ length: 61 }, (_, i) => 70 + i);
+const payoffs = prices.map(p => calcPayoff(active.legs, p));
+const maxPayoff = Math.max(...payoffs);
+const minPayoff = Math.min(...payoffs);
+const range = Math.max(Math.abs(maxPayoff), Math.abs(minPayoff), 5);
+
+// SVG dimensions
+const W = 520, H = 220, PAD = { t: 20, r: 20, b: 40, l: 56 };
+const chartW = W - PAD.l - PAD.r;
+const chartH = H - PAD.t - PAD.b;
+const xScale = (p) => PAD.l + ((p - 70) / 60) * chartW;
+const yScale = (v) => PAD.t + chartH / 2 - (v / range) * (chartH / 2) * 0.85;
+
+// Build SVG path
+const pathD = payoffs.map((v, i) =>
+  `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${yScale(v).toFixed(1)}`
+).join(" ");
+
+// Current payoff value
+const currentPayoff = calcPayoff(active.legs, S);
+const breakevens = [];
+for (let i = 1; i < payoffs.length; i++) {
+  if ((payoffs[i-1] < 0 && payoffs[i] >= 0) || (payoffs[i-1] >= 0 && payoffs[i] < 0)) {
+    const bep = prices[i-1] + (0 - payoffs[i-1]) / (payoffs[i] - payoffs[i-1]);
+    breakevens.push(Math.round(bep * 10) / 10);
+  }
+}
+
+return (
+  <div>
+    <SH title="Options Strategy Training" sub="12 core structures · Interactive payoff diagrams · Novice to advanced" />
+
+    {/* Category filter */}
+    <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+      {categories.map(cat => (
+        <button key={cat} onClick={() => setTrainingCategory(cat)} style={{
+          padding: "6px 14px",
+          background: trainingCategory === cat ? "#4a9fd4" : "#0a1a28",
+          color: trainingCategory === cat ? "#fff" : "#4a9fd4",
+          border: "2px solid #4a9fd4", borderRadius: 4, cursor: "pointer",
+          fontFamily: "monospace", fontSize: 10, fontWeight: "700",
+        }}>{cat}</button>
+      ))}
+      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 9, color: "#2a5a6a" }}>DIFFICULTY:</div>
+        {[1,2,3,4].map(d => (
+          <div key={d} style={{ width: 10, height: 10, borderRadius: "50%", background: "#c8a84b", opacity: 0.3 + d * 0.175 }} />
+        ))}
+        <div style={{ fontSize: 9, color: "#2a5a6a" }}>= advanced</div>
+      </div>
+    </div>
+
+    {/* Strategy grid */}
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 24 }}>
+      {filtered.map(s => (
+        <button key={s.id} onClick={() => { setActiveStructure(s.id); setTrainingSlider(100); }} style={{
+          padding: "10px 12px", textAlign: "left", cursor: "pointer",
+          background: activeStructure === s.id ? s.color + "25" : "#0a1a28",
+          border: `2px solid ${activeStructure === s.id ? s.color : "#1a2a3a"}`,
+          borderRadius: 6, fontFamily: "monospace",
+        }}>
+          <div style={{ fontSize: 16, marginBottom: 4 }}>{s.emoji}</div>
+          <div style={{ fontSize: 11, fontWeight: "700", color: activeStructure === s.id ? s.color : "#d0dde8", marginBottom: 2 }}>{s.name}</div>
+          <div style={{ fontSize: 9, color: "#3a6a8a", marginBottom: 6 }}>{s.tagline}</div>
+          <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: s.color + "20", color: s.color }}>{s.category}</span>
+            <div style={{ display: "flex", gap: 1, marginLeft: "auto" }}>
+              {[1,2,3,4].map(d => (
+                <div key={d} style={{ width: 5, height: 5, borderRadius: "50%", background: d <= s.difficulty ? s.color : "#1a2a3a" }} />
+              ))}
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+
+    {/* Active strategy detail */}
+    <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16 }}>
+
+      {/* Left: explanation */}
+      <div>
+        <Pan style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 14 }}>
+            <div style={{ fontSize: 32 }}>{active.emoji}</div>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: "700", color: active.color, marginBottom: 3 }}>{active.name}</div>
+              <div style={{ fontSize: 11, color: "#5a7a8a" }}>{active.tagline}</div>
+              <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: active.color + "20", color: active.color }}>{active.category}</span>
+                <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: "#1a2a3a", color: "#4a6a8a" }}>
+                  {'●'.repeat(active.difficulty) + '○'.repeat(4 - active.difficulty)} difficulty
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ fontSize: 12, color: "#8a9ab0", lineHeight: 1.8, marginBottom: 14, padding: "10px 12px", background: "#06101a", borderRadius: 4 }}>
+            {active.description}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+            {[
+              { label: "USE WHEN", value: active.when, color: "#4a9fd4" },
+              { label: "GREEKS", value: active.greeks, color: "#8b6fd4" },
+              { label: "MAX PROFIT", value: active.maxProfit, color: "#3aaa6a" },
+              { label: "MAX LOSS", value: active.maxLoss, color: "#e87a7a" },
+              { label: "BREAK-EVEN", value: active.breakeven, color: "#c8a84b" },
+            ].map((r, i) => (
+              <div key={i} style={{ padding: "8px 10px", background: "#06101a", borderRadius: 4, borderLeft: `3px solid ${r.color}`, gridColumn: i === 0 || i === 1 ? "span 1" : i === 4 ? "span 2" : "span 1" }}>
+                <div style={{ fontSize: 9, color: r.color, letterSpacing: "0.1em", marginBottom: 4 }}>{r.label}</div>
+                <div style={{ fontSize: 11, color: "#a0b8c8", lineHeight: 1.6 }}>{r.value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ padding: "10px 14px", background: "#0d2a10", borderRadius: 4, borderLeft: "3px solid #3aaa6a" }}>
+            <div style={{ fontSize: 9, color: "#3aaa6a", letterSpacing: "0.1em", marginBottom: 4 }}>💡 KEY INSIGHT</div>
+            <div style={{ fontSize: 12, color: "#80b890", lineHeight: 1.7 }}>{active.keyInsight}</div>
+          </div>
+        </Pan>
+
+        {/* Leg structure table */}
+        <Pan>
+          <Lbl>STRUCTURE — LEGS AT A GLANCE</Lbl>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
+              <thead>
+                <tr style={{ color: "#2a5a6a" }}>
+                  {["Leg", "Action", "Type", "Strike*", "Premium*"].map(h => (
+                    <th key={h} style={{ padding: "6px 10px", textAlign: "left", borderBottom: "1px solid #1a2a3a", fontWeight: "400" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {active.legs.map((leg, i) => {
+                  const isLong = leg.type.startsWith("long");
+                  const isSell = leg.type.startsWith("short");
+                  const typeLabel = leg.type.replace("long_", "").replace("short_", "").replace("_", " ");
+                  return (
+                    <tr key={i} style={{ background: i % 2 === 0 ? "#06101a" : "#040c14" }}>
+                      <td style={{ padding: "8px 10px", color: "#5a7a8a" }}>#{i + 1}</td>
+                      <td style={{ padding: "8px 10px", color: isLong ? "#3aaa6a" : isSell ? "#e87a7a" : "#c8a84b", fontWeight: "700" }}>
+                        {isLong ? "BUY" : isSell ? "SELL" : "HOLD"}
+                      </td>
+                      <td style={{ padding: "8px 10px", color: "#d0dde8", textTransform: "capitalize" }}>{typeLabel}</td>
+                      <td style={{ padding: "8px 10px", color: "#c8a84b" }}>${leg.strike}</td>
+                      <td style={{ padding: "8px 10px", color: leg.premium > 0 ? (isLong ? "#e87a7a" : "#3aaa6a") : "#5a7a8a" }}>
+                        {leg.premium > 0 ? (isLong ? `−$${leg.premium}` : `+$${leg.premium}`) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr style={{ background: "#0a1a28" }}>
+                  <td colSpan={3} style={{ padding: "8px 10px", color: "#4a6a8a" }}>Net premium per share</td>
+                  <td colSpan={2} style={{ padding: "8px 10px", fontWeight: "700" }}>
+                    {(() => {
+                      const net = active.legs.reduce((s, l) => {
+                        if (l.type.startsWith("short")) return s + l.premium;
+                        if (l.type.startsWith("long") && l.type !== "long_stock") return s - l.premium;
+                        return s;
+                      }, 0);
+                      return (
+                        <span style={{ color: net >= 0 ? "#3aaa6a" : "#e87a7a" }}>
+                          {net >= 0 ? "+" : ""}${net.toFixed(2)} {net >= 0 ? "(net credit)" : "(net debit)"}
+                        </span>
+                      );
+                    })()}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 9, color: "#2a4a5a", marginTop: 6 }}>*Example values for illustration. All figures per share; 1 contract = 100 shares.</div>
+        </Pan>
+      </div>
+
+      {/* Right: payoff diagram */}
+      <div>
+        <Pan style={{ marginBottom: 12 }}>
+          <Lbl>PAYOFF DIAGRAM AT EXPIRY</Lbl>
+
+          {/* SVG Payoff Chart */}
+          <div style={{ overflowX: "auto" }}>
+            <svg width={W} height={H} style={{ display: "block" }}>
+              {/* Grid lines */}
+              {[-range*0.85, -range*0.425, 0, range*0.425, range*0.85].map((v, i) => (
+                <g key={i}>
+                  <line x1={PAD.l} y1={yScale(v)} x2={W - PAD.r} y2={yScale(v)}
+                    stroke={v === 0 ? "#2a4a5a" : "#0f1e2e"} strokeWidth={v === 0 ? 1.5 : 1} />
+                  <text x={PAD.l - 6} y={yScale(v) + 4} textAnchor="end"
+                    fill="#2a5a6a" fontSize={9} fontFamily="monospace">
+                    {v === 0 ? "0" : (v > 0 ? "+" : "") + Math.round(v)}
+                  </text>
+                </g>
+              ))}
+
+              {/* X axis labels */}
+              {[75, 85, 95, 100, 105, 115, 125].map(p => (
+                <text key={p} x={xScale(p)} y={H - PAD.b + 14}
+                  textAnchor="middle" fill="#2a5a6a" fontSize={9} fontFamily="monospace">${p}</text>
+              ))}
+
+              {/* Zero line highlighted */}
+              <line x1={PAD.l} y1={yScale(0)} x2={W - PAD.r} y2={yScale(0)}
+                stroke="#1e3a50" strokeWidth={1} />
+
+              {/* Break-even vertical lines */}
+              {breakevens.map((bep, i) => (
+                <g key={i}>
+                  <line x1={xScale(bep)} y1={PAD.t} x2={xScale(bep)} y2={H - PAD.b}
+                    stroke="#c8a84b" strokeWidth={1} strokeDasharray="4,3" />
+                  <text x={xScale(bep)} y={PAD.t + 10} textAnchor="middle"
+                    fill="#c8a84b" fontSize={8} fontFamily="monospace">B/E ${bep}</text>
+                </g>
+              ))}
+
+              {/* Profit/loss fill areas */}
+              {(() => {
+                const zeroY = yScale(0);
+                // Profit area (above zero)
+                const profitPath = payoffs.map((v, i) =>
+                  `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${Math.min(yScale(v), zeroY).toFixed(1)}`
+                ).join(" ") + ` L ${xScale(prices[prices.length-1])} ${zeroY} L ${xScale(prices[0])} ${zeroY} Z`;
+                // Loss area (below zero)
+                const lossPath = payoffs.map((v, i) =>
+                  `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${Math.max(yScale(v), zeroY).toFixed(1)}`
+                ).join(" ") + ` L ${xScale(prices[prices.length-1])} ${zeroY} L ${xScale(prices[0])} ${zeroY} Z`;
+                return (
+                  <>
+                    <path d={profitPath} fill="#3aaa6a" fillOpacity={0.12} />
+                    <path d={lossPath} fill="#cc3333" fillOpacity={0.12} />
+                  </>
+                );
+              })()}
+
+              {/* Payoff curve */}
+              <path d={pathD} fill="none" stroke={active.color} strokeWidth={2.5} />
+
+              {/* Current price indicator (slider) */}
+              <line x1={xScale(S)} y1={PAD.t} x2={xScale(S)} y2={H - PAD.b}
+                stroke="#f0f8ff" strokeWidth={1} strokeOpacity={0.5} strokeDasharray="3,3" />
+              <circle cx={xScale(S)} cy={yScale(currentPayoff)}
+                r={5} fill={currentPayoff >= 0 ? "#3aaa6a" : "#cc3333"} stroke="#f0f8ff" strokeWidth={1.5} />
+              {/* P&L label near dot */}
+              <rect x={xScale(S) + (S > 115 ? -56 : 8)} y={yScale(currentPayoff) - 11} width={48} height={16} rx={3}
+                fill="#0a1a28" stroke={currentPayoff >= 0 ? "#3aaa6a" : "#cc3333"} strokeWidth={1} />
+              <text x={xScale(S) + (S > 115 ? -32 : 32)} y={yScale(currentPayoff) + 1}
+                textAnchor="middle" fill={currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a"}
+                fontSize={9} fontFamily="monospace" fontWeight="700">
+                {currentPayoff >= 0 ? "+" : ""}{currentPayoff.toFixed(1)}
+              </text>
+
+              {/* Profit/Loss zone labels */}
+              {maxPayoff > 0.5 && (
+                <text x={W - PAD.r - 4} y={PAD.t + 14} textAnchor="end"
+                  fill="#3aaa6a" fontSize={9} fontFamily="monospace" fillOpacity={0.6}>PROFIT</text>
+              )}
+              {minPayoff < -0.5 && (
+                <text x={W - PAD.r - 4} y={H - PAD.b - 6} textAnchor="end"
+                  fill="#cc3333" fontSize={9} fontFamily="monospace" fillOpacity={0.6}>LOSS</text>
+              )}
+
+              {/* Axis labels */}
+              <text x={W / 2} y={H - 2} textAnchor="middle"
+                fill="#1e3a50" fontSize={9} fontFamily="monospace">Stock Price at Expiry</text>
+              <text x={10} y={H / 2} textAnchor="middle" transform={`rotate(-90,10,${H/2})`}
+                fill="#1e3a50" fontSize={9} fontFamily="monospace">P&L per share ($)</text>
+            </svg>
+          </div>
+
+          {/* Slider control */}
+          <div style={{ marginTop: 8, padding: "8px 0" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ fontSize: 10, color: "#3a6a8a" }}>Drag to simulate stock price at expiry</span>
+              <span style={{ fontSize: 13, fontWeight: "700", color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a", fontFamily: "monospace" }}>
+                Stock ${S} → P&L: {currentPayoff >= 0 ? "+" : ""}{(currentPayoff * 100).toFixed(0)} /contract
+              </span>
+            </div>
+            <input type="range" min={70} max={130} step={1} value={S}
+              onChange={e => setTrainingSlider(Number(e.target.value))}
+              style={{ width: "100%", accentColor: active.color }}
+            />
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1e3a50" }}>
+              <span>$70 (−30%)</span>
+              <span>$100 (entry)</span>
+              <span>$130 (+30%)</span>
+            </div>
+          </div>
+        </Pan>
+
+        {/* Key stats at current slider value */}
+        <Pan style={{ marginBottom: 12 }}>
+          <Lbl>AT CURRENT PRICE (${S})</Lbl>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+            {[
+              { label: "P&L per share", value: `${currentPayoff >= 0 ? "+" : ""}$${currentPayoff.toFixed(2)}`, color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a" },
+              { label: "P&L per contract", value: `${currentPayoff >= 0 ? "+" : ""}$${(currentPayoff * 100).toFixed(0)}`, color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a" },
+              { label: "Break-even(s)", value: breakevens.length > 0 ? breakevens.map(b => `$${b}`).join(", ") : "N/A", color: "#c8a84b" },
+              { label: "Max profit", value: maxPayoff > 900 ? "Unlimited" : `+$${maxPayoff.toFixed(2)}/sh`, color: "#3aaa6a" },
+              { label: "Max loss", value: minPayoff < -900 ? "Unlimited" : `$${minPayoff.toFixed(2)}/sh`, color: "#e87a7a" },
+              { label: "Risk / Reward", value: Math.abs(minPayoff) > 0 ? `1 : ${(maxPayoff / Math.abs(minPayoff)).toFixed(2)}` : "∞", color: "#c8a84b" },
+            ].map((m, i) => (
+              <div key={i} style={{ background: "#06101a", borderRadius: 4, padding: "8px 10px" }}>
+                <div style={{ fontSize: 9, color: "#2a5a6a", marginBottom: 3 }}>{m.label}</div>
+                <div style={{ fontSize: 13, fontWeight: "700", color: m.color, fontFamily: "monospace" }}>{m.value}</div>
+              </div>
+            ))}
+          </div>
+        </Pan>
+
+        {/* Comparison to other strategies */}
+        <Pan>
+          <Lbl>HOW IT FITS YOUR STRATEGY</Lbl>
+          <div style={{ fontSize: 11, color: "#5a7a8a", lineHeight: 1.8 }}>
+            {active.id === "short_put" && "This is your primary SPY income vehicle. You run this 5× per week on SPY across 3 DTE rungs. The wheel strategy starts here."}
+            {active.id === "covered_call" && "Phase 2 of your wheel. After SPY put assignment, you sell covered calls on the assigned shares at or above your cost basis to recover and generate more premium."}
+            {active.id === "collar" && "Your GS hedge structure. You own 388 shares (200 unrestricted) and can collar the unrestricted portion to reduce single-name risk while funding the hedge with the call."}
+            {active.id === "bull_put_spread" && "The defined-risk version of your short put. Running bull put spreads instead of cash-secured puts would require less capital per contract but cap your max profit at the premium."}
+            {active.id === "wheel" && "This is your entire SPY strategy. You're running Phase 1 (short puts) continuously at 1–30 DTE across 3 rungs, and executing Phase 2 (covered calls) on assignment."}
+            {active.id === "protective_put" && "Relevant for your GS position. Buying puts on GS protects against a sharp decline in your largest holding. The collar strategy funds these puts by selling GS calls simultaneously."}
+            {active.id === "iron_condor" && "Not currently in your strategy but applicable: if you wanted to run SPY short puts AND short calls simultaneously, that would be a strangle or condor. Higher premium but more complex management."}
+            {!["short_put","covered_call","collar","bull_put_spread","wheel","protective_put","iron_condor"].includes(active.id) && "Study this structure to deepen your understanding of options pricing and how premium is generated. Each structure represents a different bet on direction, magnitude, and timing of moves."}
+          </div>
+        </Pan>
+      </div>
+    </div>
+  </div>
+);
 }
 
 // ─── MAIN DASHBOARD ───────────────────────────────────────────────
@@ -864,7 +1218,7 @@ function Dashboard({ params, onReset, onClearData }) {
                 {label:"Total Cash",value:fmt(CASH),sub:"Brokerage balance",color:"#4a9fd4"},
                 {label:"Reserved (Puts)",value:fmt(RESERVED),sub:"Cycles back weekly",color:"#e87a00"},
                 {label:"Free Cash",value:fmt(FREE_CASH),sub:"No margin impact",color:"#3aaa6a"},
-                {label:"HELOC Backstop",value:fmt(HELOC),sub:"External · unused",color:"#8b6fd4"},
+                {label:"External Collateral",value:fmt(HELOC),sub:"External · unused",color:"#8b6fd4"},
               ].map((c,i) => <SC key={i} {...c} />)}
             </div>
 
@@ -878,7 +1232,7 @@ function Dashboard({ params, onReset, onClearData }) {
                   {label:"  Free cash",value:fmt(FREE_CASH),bold:true,color:"#3aaa6a"},
                   {label:`Stock positions (unrestricted: ${TOTAL_UNREST} sh)`,value:fmt(STOCKS.reduce((s,st)=>(Number(st.unrestrictedShares)||0)*(Number(st.price)||0)+s,0)),color:"#4a9fd4"},
                   {label:`Stock positions (restricted: ${TOTAL_REST} sh)`,value:fmt(STOCKS.reduce((s,st)=>(Number(st.restrictedShares)||0)*(Number(st.price)||0)+s,0)),color:"#5a6a7a"},
-                  {label:"HELOC backstop (external)",value:fmt(HELOC),color:"#8b6fd4"},
+                  {label:"External collateral (HELOC/line of credit)",value:fmt(HELOC),color:"#8b6fd4"},
                 ].map((r,i) => (
                   <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #1a2a3a",fontWeight:r.bold?"700":"400"}}>
                     <span style={{fontSize:11,color:"#5a7a8a"}}>{r.label}</span>
@@ -919,7 +1273,7 @@ function Dashboard({ params, onReset, onClearData }) {
                 {[
                   ["Zero margin cost","Every premium dollar is net income. No interest offset."],
                   [fmt(RESERVED)+" cycles weekly","Reserved collateral frees as puts expire — it's revolving."],
-                  ["HELOC removes forced-sale risk",`${fmt(CASH)} cash + ${fmt(HELOC)} HELOC = ${fmt(CASH+HELOC)} capacity. Total stock equity: ${fmt(TOTAL_STOCK_VALUE)}.`],
+                  ["External collateral removes forced-sale risk",`${fmt(CASH)} cash + ${fmt(HELOC)} external collateral = ${fmt(CASH+HELOC)} capacity. Total stock equity: ${fmt(TOTAL_STOCK_VALUE)}.`],
                 ].map(([t,b],i) => (
                   <div key={i} style={{marginBottom:8,padding:"8px 10px",background:"#06101a",borderRadius:4,borderLeft:"2px solid #c8a84b"}}>
                     <div style={{fontSize:10,color:"#c8a84b",marginBottom:3}}>{t}</div>
@@ -1019,14 +1373,14 @@ function Dashboard({ params, onReset, onClearData }) {
                       const not = n*SPY*100;
                       const cost = n*Math.round(SPY*0.985)*100;
                       const ann = n*P.avgPremium*100*CYCLES*52;
-                      const funded = cost<=CASH?"Cash only":cost<=CASH+HELOC?`+${fmt(cost-CASH)} HELOC`:"Exceeds resources";
+                      const funded = cost<=CASH?"Cash only":cost<=CASH+HELOC?`+${fmt(cost-CASH)} ext. collateral`:"Exceeds resources";
                       const isRec = n===10;
                       return (
                         <div key={i} style={{display:"grid",gridTemplateColumns:"0.4fr 0.9fr 0.9fr 1.1fr 0.9fr",padding:"7px 0",borderBottom:"1px solid #1a2a3a",color:isRec?"#c8a84b":"#5a7a8a",fontWeight:isRec?"700":"400"}}>
                           <span>{n}{isRec?"★":""}</span>
                           <span>${Math.round(not/1000)}k</span>
                           <span>${Math.round(cost/1000)}k</span>
-                          <span style={{color:funded.includes("HELOC")?"#8b6fd4":funded.includes("Exceeds")?"#cc3333":"#3aaa6a"}}>{funded}</span>
+                          <span style={{color:funded.includes("ext. collateral")?"#8b6fd4":funded.includes("Exceeds")?"#cc3333":"#3aaa6a"}}>{funded}</span>
                           <span>${Math.round(ann/1000)}k</span>
                         </div>
                       );
@@ -1059,7 +1413,7 @@ function Dashboard({ params, onReset, onClearData }) {
                   </div>
                 </div>
                 <button onClick={()=>setUseHeloc(!useHeloc)} style={{padding:"8px 14px",background:useHeloc?"#8b6fd4":"#0a1a28",color:useHeloc?"#fff":"#3a6a8a",border:`1px solid ${useHeloc?"#8b6fd4":"#1a3a50"}`,borderRadius:4,cursor:"pointer",fontSize:10,fontFamily:"monospace",fontWeight:"700",marginBottom:16}}>
-                  HELOC {useHeloc?"✓ ON":"OFF"} — {fmt(HELOC)}
+                  Ext. Collateral {useHeloc?"✓ ON":"OFF"} — {fmt(HELOC)}
                 </button>
 
                 <Lbl>SHOCK P&L</Lbl>
@@ -1077,7 +1431,7 @@ function Dashboard({ params, onReset, onClearData }) {
                 <div style={{marginTop:10,padding:"10px",background:"#06101a",borderRadius:4}}>
                   <span style={{fontSize:11,color:"#5a7a8a"}}>Account after shock: </span>
                   <span style={{fontSize:14,fontWeight:"700",color:"#c8a84b"}}>{fmt(ACCOUNT+totalPnl)}</span>
-                  <div style={{fontSize:10,color:"#2a5a6a",marginTop:2}}>Paper — no forced selling with HELOC in place</div>
+                  <div style={{fontSize:10,color:"#2a5a6a",marginTop:2}}>Paper — no forced selling with external collateral in place</div>
                 </div>
               </Pan>
 
@@ -1097,7 +1451,7 @@ function Dashboard({ params, onReset, onClearData }) {
                       {[
                         {src:"Put collateral converts to shares",amt:step1,color:"#e87a00",note:"Reserved cash IS the payment — changes form"},
                         {src:"Free cash (SPAXX)",amt:step2,color:"#4a9fd4",note:fmt(FREE_CASH)+" available"},
-                        ...(r2>0?[{src:useHeloc?"HELOC draw":"⚠ Shortfall (HELOC off)",amt:useHeloc?step3:r2,color:useHeloc?"#8b6fd4":"#cc3333",note:useHeloc?"Repay from covered call income in 60–90 days":"Toggle HELOC on"}]:[]),
+                        ...(r2>0?[{src:useHeloc?"Ext. collateral draw":"⚠ Shortfall (ext. collateral off)",amt:useHeloc?step3:r2,color:useHeloc?"#8b6fd4":"#cc3333",note:useHeloc?"Repay external collateral from covered call income in 60–90 days":"Toggle external collateral on"}]:[]),
                         {src:ok||(useHeloc&&r3<=0)?"✓ Fully funded — no stock sale":`⚠ Gap: ${fmt(r3)}`,amt:null,color:ok||(useHeloc&&r3<=0)?"#3aaa6a":"#cc3333",note:ok||(useHeloc&&r3<=0)?`Own ${contracts*100} ${P.ticker} @ ~$${strikeEst}. Sell covered calls.`:"Reduce contract count"},
                       ].map((r,i) => (
                         <div key={i} style={{padding:"9px 12px",borderRadius:4,marginBottom:6,background:"#06101a",borderLeft:`3px solid ${r.color}`}}>
@@ -1211,7 +1565,7 @@ function Dashboard({ params, onReset, onClearData }) {
                   ["Normal market","R1 expires worthless. R2 decays. R3 collects theta. Re-enter R1 every 2–3 days."],
                   [`${P.ticker} −5%`,"R1 may assign. R2 delta rising but rollable. R3 untouched — acts as income buffer."],
                   [`${P.ticker} −10–15%`,"R1 assigns. Roll R2 down/out on elevated VIX for credit. R3 gives 3–4 weeks to decide."],
-                  [`${P.ticker} −20%+`,"All rungs pressured. Roll R3 aggressively. Let R1/R2 assign. HELOC funds it."],
+                  [`${P.ticker} −20%+`,"All rungs pressured. Roll R3 aggressively. Let R1/R2 assign. External collateral funds it."],
                 ].map(([s,a],i) => (
                   <div key={i} style={{padding:"10px 12px",background:"#06101a",borderRadius:4,borderLeft:"2px solid #e87a00"}}>
                     <div style={{fontSize:10,color:"#e87a00",marginBottom:3}}>{s}</div>
@@ -1712,7 +2066,7 @@ function Dashboard({ params, onReset, onClearData }) {
                   {[
                     {t:"Can you roll for net credit ≥ $0.05?",b:"This is the only question that matters. If yes — roll. You improve your strike, extend your runway, collect cash. If no — take assignment."},
                     {t:"Never pay >$1.00 debit to roll",b:"A debit roll compounds if the underlying keeps dropping. Only justified debit: SPY at clear technical support + strong bounce conviction within 2 weeks."},
-                    {t:"Assignment is not failure",b:`Your strategy is designed to accept assignment. You have the HELOC, the cash, and the covered call playbook. Taking ${P.ticker} shares at a discount and selling calls is a valid outcome — don't over-optimize.`},
+                    {t:"Assignment is not failure",b:`Your strategy is designed to accept assignment. You have external collateral, the cash, and the covered call playbook. Taking ${P.ticker} shares at a discount and selling calls is a valid outcome — don't over-optimize.`},
                   ].map((p,i) => (
                     <div key={i} style={{padding:"11px 14px",background:"#06101a",borderRadius:6,marginBottom:8,borderLeft:"3px solid #c8a84b"}}>
                       <div style={{fontSize:11,color:"#c8a84b",fontWeight:"700",marginBottom:5}}>{p.t}</div>
@@ -1765,7 +2119,7 @@ function Dashboard({ params, onReset, onClearData }) {
                       {label:`${P.ticker} −2–3%`,color:"#c8a84b",delta:"0.55–0.65",action:`Roll down 2–3%, same expiry or +1 week, for a credit. Routine in normal vol — collect $0.50–2.00. Rung 3 has most flexibility.`,outcome:"New strike 2–3% lower, net credit in account. Continue theta decay at improved position."},
                       {label:`${P.ticker} −5–7%`,color:"#e87a00",delta:"0.70–0.80",action:`Roll R3 down 4–6%, out 3–4 weeks. Elevated VIX (which comes with this drop) funds a $3–8/contract credit. R2: +2 weeks, 3–4% lower. R1: buy back, re-enter next week 4–5% lower.`,outcome:`Exit deep ITM, re-establish with cushion. VIX premium pays for the improvement.`},
                       {label:`${P.ticker} −10–15%`,color:"#cc3333",delta:"0.85–0.95",action:`Push R3 strikes to clear support levels. May only collect $3–5 credit after buying back ITM positions, but reset with 30 DTE at much lower strikes. R1/R2: take assignment if <7 DTE. Begin covered call cycle.`,outcome:`Assignment on R1/R2. R3 rolled to low strikes. Covered call income starts immediately.`},
-                      {label:`${P.ticker} −20%+`,color:"#8b0000",delta:"~1.0",action:`Stop rolling R1/R2 — take assignment, HELOC funds it. One aggressive R3 roll attempt for any credit. If unavailable: take R3 assignment at expiry. Do not pay large debits to extend.`,outcome:`Own 1,500 ${P.ticker} shares at discounted cost. VIX high = exceptional covered call income. Recover rapidly.`},
+                      {label:`${P.ticker} −20%+`,color:"#8b0000",delta:"~1.0",action:`Stop rolling R1/R2 — take assignment, External collateral funds it. One aggressive R3 roll attempt for any credit. If unavailable: take R3 assignment at expiry. Do not pay large debits to extend.`,outcome:`Own 1,500 ${P.ticker} shares at discounted cost. VIX high = exceptional covered call income. Recover rapidly.`},
                     ].map((s,i) => (
                       <button key={i} onClick={()=>setItmScenario(i)} style={{flex:1,minWidth:90,padding:"6px 6px",background:itmScenario===i?s.color:"#0a1a28",color:itmScenario===i?"#fff":s.color,border:`1px solid ${s.color}`,borderRadius:4,cursor:"pointer",fontSize:9,fontFamily:"monospace",fontWeight:"700"}}>{s.label}</button>
                     ))}
@@ -1775,7 +2129,7 @@ function Dashboard({ params, onReset, onClearData }) {
                       {label:`${P.ticker} −2–3%`,color:"#c8a84b",delta:"0.55–0.65",action:`Roll down 2–3%, same expiry or +1 week, for a credit. Routine in normal vol — collect $0.50–2.00. Rung 3 has most flexibility.`,outcome:"New strike 2–3% lower, net credit in account. Continue theta decay at improved position."},
                       {label:`${P.ticker} −5–7%`,color:"#e87a00",delta:"0.70–0.80",action:`Roll R3 down 4–6%, out 3–4 weeks. Elevated VIX funds $3–8/contract credit. R2: +2 weeks, 3–4% lower. R1: buy back, re-enter 4–5% lower.`,outcome:`Exit deep ITM, re-establish with cushion. VIX premium pays for the improvement.`},
                       {label:`${P.ticker} −10–15%`,color:"#cc3333",delta:"0.85–0.95",action:`Push R3 to clear support levels. R1/R2: take assignment if <7 DTE. Begin covered call cycle immediately.`,outcome:`Assignment on R1/R2. R3 rolled to low strikes. Covered call income starts.`},
-                      {label:`${P.ticker} −20%+`,color:"#8b0000",delta:"~1.0",action:`Take assignment on R1/R2. HELOC funds it. One aggressive R3 roll attempt, then take assignment. Do not pay large debits.`,outcome:`Own 1,500 ${P.ticker} shares at discount. Exceptional covered call income during high VIX.`},
+                      {label:`${P.ticker} −20%+`,color:"#8b0000",delta:"~1.0",action:`Take assignment on R1/R2. External collateral funds it. One aggressive R3 roll attempt, then take assignment. Do not pay large debits.`,outcome:`Own 1,500 ${P.ticker} shares at discount. Exceptional covered call income during high VIX.`},
                     ];
                     const s = scenarios[itmScenario];
                     return (
@@ -1801,8 +2155,8 @@ function Dashboard({ params, onReset, onClearData }) {
                   {[
                     {week:"Week 1",action:`Sell covered calls on all assigned ${P.ticker} shares at 0.5–1% OTM. Collect at elevated VIX.`,income:"$4–8k"},
                     {week:"Wks 2–4",action:"Continue cycle. If called away above cost basis, book profit and redeploy.",income:"$4–8k/wk"},
-                    {week:"Month 2",action:"HELOC balance down 40–60% from call income. Resume R3 puts on recovery.",income:"Ongoing"},
-                    {week:"Month 3",action:"HELOC repaid. Resume full 3-rung ladder as VIX normalizes.",income:"Full capacity"},
+                    {week:"Month 2",action:"External collateral balance down 40–60% from call income. Resume R3 puts on recovery.",income:"Ongoing"},
+                    {week:"Month 3",action:"External collateral repaid. Resume full 3-rung ladder as VIX normalizes.",income:"Full capacity"},
                   ].map((r,i) => (
                     <div key={i} style={{display:"grid",gridTemplateColumns:"0.6fr 2fr 0.7fr",gap:8,padding:"7px 0",borderBottom:"1px solid #1a2a3a",alignItems:"start"}}>
                       <span style={{fontSize:10,color:"#c8a84b",fontWeight:"700"}}>{r.week}</span>
@@ -1817,357 +2171,7 @@ function Dashboard({ params, onReset, onClearData }) {
         )}
 
         {/* ═══ OPTIONS TRAINING ═══ */}
-        {section === "training" && (() => {
-          const categories = ["All", "Basic", "Income", "Hedging", "Spread", "Advanced"];
-          const filtered = trainingCategory === "All"
-            ? TRAINING_STRUCTURES
-            : TRAINING_STRUCTURES.filter(s => s.category === trainingCategory);
-          const active = TRAINING_STRUCTURES.find(s => s.id === activeStructure) || TRAINING_STRUCTURES[0];
-
-          // ── Payoff calculator ──
-          const S = trainingSlider; // current stock price in diagram (centered on 100)
-          const calcPayoff = (legs, S) => {
-            return legs.reduce((total, leg) => {
-              const { type, strike, premium } = leg;
-              if (type === "long_call")  return total + Math.max(0, S - strike) - premium;
-              if (type === "short_call") return total + premium - Math.max(0, S - strike);
-              if (type === "long_put")   return total + Math.max(0, strike - S) - premium;
-              if (type === "short_put")  return total + premium - Math.max(0, strike - S);
-              if (type === "long_stock") return total + (S - strike); // strike = purchase price
-              return total;
-            }, 0);
-          };
-
-          // Build payoff curve points
-          const prices = Array.from({ length: 61 }, (_, i) => 70 + i);
-          const payoffs = prices.map(p => calcPayoff(active.legs, p));
-          const maxPayoff = Math.max(...payoffs);
-          const minPayoff = Math.min(...payoffs);
-          const range = Math.max(Math.abs(maxPayoff), Math.abs(minPayoff), 5);
-
-          // SVG dimensions
-          const W = 520, H = 220, PAD = { t: 20, r: 20, b: 40, l: 56 };
-          const chartW = W - PAD.l - PAD.r;
-          const chartH = H - PAD.t - PAD.b;
-          const xScale = (p) => PAD.l + ((p - 70) / 60) * chartW;
-          const yScale = (v) => PAD.t + chartH / 2 - (v / range) * (chartH / 2) * 0.85;
-
-          // Build SVG path
-          const pathD = payoffs.map((v, i) =>
-            `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${yScale(v).toFixed(1)}`
-          ).join(" ");
-
-          // Current payoff value
-          const currentPayoff = calcPayoff(active.legs, S);
-          const breakevens = [];
-          for (let i = 1; i < payoffs.length; i++) {
-            if ((payoffs[i-1] < 0 && payoffs[i] >= 0) || (payoffs[i-1] >= 0 && payoffs[i] < 0)) {
-              const bep = prices[i-1] + (0 - payoffs[i-1]) / (payoffs[i] - payoffs[i-1]);
-              breakevens.push(Math.round(bep * 10) / 10);
-            }
-          }
-
-          return (
-            <div>
-              <SH title="Options Strategy Training" sub="12 core structures · Interactive payoff diagrams · Novice to advanced" />
-
-              {/* Category filter */}
-              <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-                {categories.map(cat => (
-                  <button key={cat} onClick={() => setTrainingCategory(cat)} style={{
-                    padding: "6px 14px",
-                    background: trainingCategory === cat ? "#4a9fd4" : "#0a1a28",
-                    color: trainingCategory === cat ? "#fff" : "#4a9fd4",
-                    border: "2px solid #4a9fd4", borderRadius: 4, cursor: "pointer",
-                    fontFamily: "monospace", fontSize: 10, fontWeight: "700",
-                  }}>{cat}</button>
-                ))}
-                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-                  <div style={{ fontSize: 9, color: "#2a5a6a" }}>DIFFICULTY:</div>
-                  {[1,2,3,4].map(d => (
-                    <div key={d} style={{ width: 10, height: 10, borderRadius: "50%", background: "#c8a84b", opacity: 0.3 + d * 0.175 }} />
-                  ))}
-                  <div style={{ fontSize: 9, color: "#2a5a6a" }}>= advanced</div>
-                </div>
-              </div>
-
-              {/* Strategy grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginBottom: 24 }}>
-                {filtered.map(s => (
-                  <button key={s.id} onClick={() => { setActiveStructure(s.id); setTrainingSlider(100); }} style={{
-                    padding: "10px 12px", textAlign: "left", cursor: "pointer",
-                    background: activeStructure === s.id ? s.color + "25" : "#0a1a28",
-                    border: `2px solid ${activeStructure === s.id ? s.color : "#1a2a3a"}`,
-                    borderRadius: 6, fontFamily: "monospace",
-                  }}>
-                    <div style={{ fontSize: 16, marginBottom: 4 }}>{s.emoji}</div>
-                    <div style={{ fontSize: 11, fontWeight: "700", color: activeStructure === s.id ? s.color : "#d0dde8", marginBottom: 2 }}>{s.name}</div>
-                    <div style={{ fontSize: 9, color: "#3a6a8a", marginBottom: 6 }}>{s.tagline}</div>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: s.color + "20", color: s.color }}>{s.category}</span>
-                      <div style={{ display: "flex", gap: 1, marginLeft: "auto" }}>
-                        {[1,2,3,4].map(d => (
-                          <div key={d} style={{ width: 5, height: 5, borderRadius: "50%", background: d <= s.difficulty ? s.color : "#1a2a3a" }} />
-                        ))}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              {/* Active strategy detail */}
-              <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 16 }}>
-
-                {/* Left: explanation */}
-                <div>
-                  <Pan style={{ marginBottom: 12 }}>
-                    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: 14 }}>
-                      <div style={{ fontSize: 32 }}>{active.emoji}</div>
-                      <div>
-                        <div style={{ fontSize: 18, fontWeight: "700", color: active.color, marginBottom: 3 }}>{active.name}</div>
-                        <div style={{ fontSize: 11, color: "#5a7a8a" }}>{active.tagline}</div>
-                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: active.color + "20", color: active.color }}>{active.category}</span>
-                          <span style={{ fontSize: 9, padding: "2px 8px", borderRadius: 3, background: "#1a2a3a", color: "#4a6a8a" }}>
-                            {'●'.repeat(active.difficulty) + '○'.repeat(4 - active.difficulty)} difficulty
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ fontSize: 12, color: "#8a9ab0", lineHeight: 1.8, marginBottom: 14, padding: "10px 12px", background: "#06101a", borderRadius: 4 }}>
-                      {active.description}
-                    </div>
-
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
-                      {[
-                        { label: "USE WHEN", value: active.when, color: "#4a9fd4" },
-                        { label: "GREEKS", value: active.greeks, color: "#8b6fd4" },
-                        { label: "MAX PROFIT", value: active.maxProfit, color: "#3aaa6a" },
-                        { label: "MAX LOSS", value: active.maxLoss, color: "#e87a7a" },
-                        { label: "BREAK-EVEN", value: active.breakeven, color: "#c8a84b" },
-                      ].map((r, i) => (
-                        <div key={i} style={{ padding: "8px 10px", background: "#06101a", borderRadius: 4, borderLeft: `3px solid ${r.color}`, gridColumn: i === 0 || i === 1 ? "span 1" : i === 4 ? "span 2" : "span 1" }}>
-                          <div style={{ fontSize: 9, color: r.color, letterSpacing: "0.1em", marginBottom: 4 }}>{r.label}</div>
-                          <div style={{ fontSize: 11, color: "#a0b8c8", lineHeight: 1.6 }}>{r.value}</div>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div style={{ padding: "10px 14px", background: "#0d2a10", borderRadius: 4, borderLeft: "3px solid #3aaa6a" }}>
-                      <div style={{ fontSize: 9, color: "#3aaa6a", letterSpacing: "0.1em", marginBottom: 4 }}>💡 KEY INSIGHT</div>
-                      <div style={{ fontSize: 12, color: "#80b890", lineHeight: 1.7 }}>{active.keyInsight}</div>
-                    </div>
-                  </Pan>
-
-                  {/* Leg structure table */}
-                  <Pan>
-                    <Lbl>STRUCTURE — LEGS AT A GLANCE</Lbl>
-                    <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: "monospace" }}>
-                        <thead>
-                          <tr style={{ color: "#2a5a6a" }}>
-                            {["Leg", "Action", "Type", "Strike*", "Premium*"].map(h => (
-                              <th key={h} style={{ padding: "6px 10px", textAlign: "left", borderBottom: "1px solid #1a2a3a", fontWeight: "400" }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {active.legs.map((leg, i) => {
-                            const isLong = leg.type.startsWith("long");
-                            const isSell = leg.type.startsWith("short");
-                            const typeLabel = leg.type.replace("long_", "").replace("short_", "").replace("_", " ");
-                            return (
-                              <tr key={i} style={{ background: i % 2 === 0 ? "#06101a" : "#040c14" }}>
-                                <td style={{ padding: "8px 10px", color: "#5a7a8a" }}>#{i + 1}</td>
-                                <td style={{ padding: "8px 10px", color: isLong ? "#3aaa6a" : isSell ? "#e87a7a" : "#c8a84b", fontWeight: "700" }}>
-                                  {isLong ? "BUY" : isSell ? "SELL" : "HOLD"}
-                                </td>
-                                <td style={{ padding: "8px 10px", color: "#d0dde8", textTransform: "capitalize" }}>{typeLabel}</td>
-                                <td style={{ padding: "8px 10px", color: "#c8a84b" }}>${leg.strike}</td>
-                                <td style={{ padding: "8px 10px", color: leg.premium > 0 ? (isLong ? "#e87a7a" : "#3aaa6a") : "#5a7a8a" }}>
-                                  {leg.premium > 0 ? (isLong ? `−$${leg.premium}` : `+$${leg.premium}`) : "—"}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                          <tr style={{ background: "#0a1a28" }}>
-                            <td colSpan={3} style={{ padding: "8px 10px", color: "#4a6a8a" }}>Net premium per share</td>
-                            <td colSpan={2} style={{ padding: "8px 10px", fontWeight: "700" }}>
-                              {(() => {
-                                const net = active.legs.reduce((s, l) => {
-                                  if (l.type.startsWith("short")) return s + l.premium;
-                                  if (l.type.startsWith("long") && l.type !== "long_stock") return s - l.premium;
-                                  return s;
-                                }, 0);
-                                return (
-                                  <span style={{ color: net >= 0 ? "#3aaa6a" : "#e87a7a" }}>
-                                    {net >= 0 ? "+" : ""}${net.toFixed(2)} {net >= 0 ? "(net credit)" : "(net debit)"}
-                                  </span>
-                                );
-                              })()}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <div style={{ fontSize: 9, color: "#2a4a5a", marginTop: 6 }}>*Example values for illustration. All figures per share; 1 contract = 100 shares.</div>
-                  </Pan>
-                </div>
-
-                {/* Right: payoff diagram */}
-                <div>
-                  <Pan style={{ marginBottom: 12 }}>
-                    <Lbl>PAYOFF DIAGRAM AT EXPIRY</Lbl>
-
-                    {/* SVG Payoff Chart */}
-                    <div style={{ overflowX: "auto" }}>
-                      <svg width={W} height={H} style={{ display: "block" }}>
-                        {/* Grid lines */}
-                        {[-range*0.85, -range*0.425, 0, range*0.425, range*0.85].map((v, i) => (
-                          <g key={i}>
-                            <line x1={PAD.l} y1={yScale(v)} x2={W - PAD.r} y2={yScale(v)}
-                              stroke={v === 0 ? "#2a4a5a" : "#0f1e2e"} strokeWidth={v === 0 ? 1.5 : 1} />
-                            <text x={PAD.l - 6} y={yScale(v) + 4} textAnchor="end"
-                              fill="#2a5a6a" fontSize={9} fontFamily="monospace">
-                              {v === 0 ? "0" : (v > 0 ? "+" : "") + Math.round(v)}
-                            </text>
-                          </g>
-                        ))}
-
-                        {/* X axis labels */}
-                        {[75, 85, 95, 100, 105, 115, 125].map(p => (
-                          <text key={p} x={xScale(p)} y={H - PAD.b + 14}
-                            textAnchor="middle" fill="#2a5a6a" fontSize={9} fontFamily="monospace">${p}</text>
-                        ))}
-
-                        {/* Zero line highlighted */}
-                        <line x1={PAD.l} y1={yScale(0)} x2={W - PAD.r} y2={yScale(0)}
-                          stroke="#1e3a50" strokeWidth={1} />
-
-                        {/* Break-even vertical lines */}
-                        {breakevens.map((bep, i) => (
-                          <g key={i}>
-                            <line x1={xScale(bep)} y1={PAD.t} x2={xScale(bep)} y2={H - PAD.b}
-                              stroke="#c8a84b" strokeWidth={1} strokeDasharray="4,3" />
-                            <text x={xScale(bep)} y={PAD.t + 10} textAnchor="middle"
-                              fill="#c8a84b" fontSize={8} fontFamily="monospace">B/E ${bep}</text>
-                          </g>
-                        ))}
-
-                        {/* Profit/loss fill areas */}
-                        {(() => {
-                          const zeroY = yScale(0);
-                          // Profit area (above zero)
-                          const profitPath = payoffs.map((v, i) =>
-                            `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${Math.min(yScale(v), zeroY).toFixed(1)}`
-                          ).join(" ") + ` L ${xScale(prices[prices.length-1])} ${zeroY} L ${xScale(prices[0])} ${zeroY} Z`;
-                          // Loss area (below zero)
-                          const lossPath = payoffs.map((v, i) =>
-                            `${i === 0 ? "M" : "L"} ${xScale(prices[i]).toFixed(1)} ${Math.max(yScale(v), zeroY).toFixed(1)}`
-                          ).join(" ") + ` L ${xScale(prices[prices.length-1])} ${zeroY} L ${xScale(prices[0])} ${zeroY} Z`;
-                          return (
-                            <>
-                              <path d={profitPath} fill="#3aaa6a" fillOpacity={0.12} />
-                              <path d={lossPath} fill="#cc3333" fillOpacity={0.12} />
-                            </>
-                          );
-                        })()}
-
-                        {/* Payoff curve */}
-                        <path d={pathD} fill="none" stroke={active.color} strokeWidth={2.5} />
-
-                        {/* Current price indicator (slider) */}
-                        <line x1={xScale(S)} y1={PAD.t} x2={xScale(S)} y2={H - PAD.b}
-                          stroke="#f0f8ff" strokeWidth={1} strokeOpacity={0.5} strokeDasharray="3,3" />
-                        <circle cx={xScale(S)} cy={yScale(currentPayoff)}
-                          r={5} fill={currentPayoff >= 0 ? "#3aaa6a" : "#cc3333"} stroke="#f0f8ff" strokeWidth={1.5} />
-                        {/* P&L label near dot */}
-                        <rect x={xScale(S) + (S > 115 ? -56 : 8)} y={yScale(currentPayoff) - 11} width={48} height={16} rx={3}
-                          fill="#0a1a28" stroke={currentPayoff >= 0 ? "#3aaa6a" : "#cc3333"} strokeWidth={1} />
-                        <text x={xScale(S) + (S > 115 ? -32 : 32)} y={yScale(currentPayoff) + 1}
-                          textAnchor="middle" fill={currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a"}
-                          fontSize={9} fontFamily="monospace" fontWeight="700">
-                          {currentPayoff >= 0 ? "+" : ""}{currentPayoff.toFixed(1)}
-                        </text>
-
-                        {/* Profit/Loss zone labels */}
-                        {maxPayoff > 0.5 && (
-                          <text x={W - PAD.r - 4} y={PAD.t + 14} textAnchor="end"
-                            fill="#3aaa6a" fontSize={9} fontFamily="monospace" fillOpacity={0.6}>PROFIT</text>
-                        )}
-                        {minPayoff < -0.5 && (
-                          <text x={W - PAD.r - 4} y={H - PAD.b - 6} textAnchor="end"
-                            fill="#cc3333" fontSize={9} fontFamily="monospace" fillOpacity={0.6}>LOSS</text>
-                        )}
-
-                        {/* Axis labels */}
-                        <text x={W / 2} y={H - 2} textAnchor="middle"
-                          fill="#1e3a50" fontSize={9} fontFamily="monospace">Stock Price at Expiry</text>
-                        <text x={10} y={H / 2} textAnchor="middle" transform={`rotate(-90,10,${H/2})`}
-                          fill="#1e3a50" fontSize={9} fontFamily="monospace">P&L per share ($)</text>
-                      </svg>
-                    </div>
-
-                    {/* Slider control */}
-                    <div style={{ marginTop: 8, padding: "8px 0" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                        <span style={{ fontSize: 10, color: "#3a6a8a" }}>Drag to simulate stock price at expiry</span>
-                        <span style={{ fontSize: 13, fontWeight: "700", color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a", fontFamily: "monospace" }}>
-                          Stock ${S} → P&L: {currentPayoff >= 0 ? "+" : ""}{(currentPayoff * 100).toFixed(0)} /contract
-                        </span>
-                      </div>
-                      <input type="range" min={70} max={130} step={1} value={S}
-                        onChange={e => setTrainingSlider(Number(e.target.value))}
-                        style={{ width: "100%", accentColor: active.color }}
-                      />
-                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#1e3a50" }}>
-                        <span>$70 (−30%)</span>
-                        <span>$100 (entry)</span>
-                        <span>$130 (+30%)</span>
-                      </div>
-                    </div>
-                  </Pan>
-
-                  {/* Key stats at current slider value */}
-                  <Pan style={{ marginBottom: 12 }}>
-                    <Lbl>AT CURRENT PRICE (${S})</Lbl>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                      {[
-                        { label: "P&L per share", value: `${currentPayoff >= 0 ? "+" : ""}$${currentPayoff.toFixed(2)}`, color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a" },
-                        { label: "P&L per contract", value: `${currentPayoff >= 0 ? "+" : ""}$${(currentPayoff * 100).toFixed(0)}`, color: currentPayoff >= 0 ? "#3aaa6a" : "#e87a7a" },
-                        { label: "Break-even(s)", value: breakevens.length > 0 ? breakevens.map(b => `$${b}`).join(", ") : "N/A", color: "#c8a84b" },
-                        { label: "Max profit", value: maxPayoff > 900 ? "Unlimited" : `+$${maxPayoff.toFixed(2)}/sh`, color: "#3aaa6a" },
-                        { label: "Max loss", value: minPayoff < -900 ? "Unlimited" : `$${minPayoff.toFixed(2)}/sh`, color: "#e87a7a" },
-                        { label: "Risk / Reward", value: Math.abs(minPayoff) > 0 ? `1 : ${(maxPayoff / Math.abs(minPayoff)).toFixed(2)}` : "∞", color: "#c8a84b" },
-                      ].map((m, i) => (
-                        <div key={i} style={{ background: "#06101a", borderRadius: 4, padding: "8px 10px" }}>
-                          <div style={{ fontSize: 9, color: "#2a5a6a", marginBottom: 3 }}>{m.label}</div>
-                          <div style={{ fontSize: 13, fontWeight: "700", color: m.color, fontFamily: "monospace" }}>{m.value}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </Pan>
-
-                  {/* Comparison to other strategies */}
-                  <Pan>
-                    <Lbl>HOW IT FITS YOUR STRATEGY</Lbl>
-                    <div style={{ fontSize: 11, color: "#5a7a8a", lineHeight: 1.8 }}>
-                      {active.id === "short_put" && "This is your primary SPY income vehicle. You run this 5× per week on SPY across 3 DTE rungs. The wheel strategy starts here."}
-                      {active.id === "covered_call" && "Phase 2 of your wheel. After SPY put assignment, you sell covered calls on the assigned shares at or above your cost basis to recover and generate more premium."}
-                      {active.id === "collar" && "Your GS hedge structure. You own 388 shares (200 unrestricted) and can collar the unrestricted portion to reduce single-name risk while funding the hedge with the call."}
-                      {active.id === "bull_put_spread" && "The defined-risk version of your short put. Running bull put spreads instead of cash-secured puts would require less capital per contract but cap your max profit at the premium."}
-                      {active.id === "wheel" && "This is your entire SPY strategy. You're running Phase 1 (short puts) continuously at 1–30 DTE across 3 rungs, and executing Phase 2 (covered calls) on assignment."}
-                      {active.id === "protective_put" && "Relevant for your GS position. Buying puts on GS protects against a sharp decline in your largest holding. The collar strategy funds these puts by selling GS calls simultaneously."}
-                      {active.id === "iron_condor" && "Not currently in your strategy but applicable: if you wanted to run SPY short puts AND short calls simultaneously, that would be a strangle or condor. Higher premium but more complex management."}
-                      {!["short_put","covered_call","collar","bull_put_spread","wheel","protective_put","iron_condor"].includes(active.id) && "Study this structure to deepen your understanding of options pricing and how premium is generated. Each structure represents a different bet on direction, magnitude, and timing of moves."}
-                    </div>
-                  </Pan>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {section === "training" && <TrainingTab trainingCategory={trainingCategory} setTrainingCategory={setTrainingCategory} activeStructure={activeStructure} setActiveStructure={setActiveStructure} trainingSlider={trainingSlider} setTrainingSlider={setTrainingSlider} />}
 
       </div>
 
