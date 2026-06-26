@@ -338,17 +338,42 @@ const DEFAULT_FORM = {
 };
 
 // Storage uses localStorage — private to each user's browser, persists across refreshes.
+// Coerce all numeric fields to proper JS numbers after loading from storage.
+// localStorage returns everything as strings on JSON.parse in some environments,
+// which breaks .toFixed(), arithmetic, and comparison operators.
+function sanitizeParams(p) {
+  if (!p) return p;
+  const s = { ...p };
+  const numericKeys = [
+    "underlyingPrice","totalCash","heloc","reservedForOptions",
+    "avgPremium","cyclesPerWeek",
+  ];
+  numericKeys.forEach(k => {
+    if (s[k] !== undefined && s[k] !== "") s[k] = Number(s[k]) || 0;
+  });
+  if (Array.isArray(s.stocks)) {
+    s.stocks = s.stocks.map(st => ({
+      ...st,
+      price:              Number(st.price)              || 0,
+      unrestrictedShares: Number(st.unrestrictedShares) || 0,
+      restrictedShares:   Number(st.restrictedShares)   || 0,
+      ccAvgPremium:       Number(st.ccAvgPremium)       || 0,
+      ccCyclesPerYear:    Number(st.ccCyclesPerYear)     || 48,
+    }));
+  }
+  return s;
+}
+
 function loadSavedParams() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    return raw ? sanitizeParams(JSON.parse(raw)) : null;
   } catch {
     return null;
   }
 }
 
 function saveParams(params) {
-  // Only persist personal fields — strategy params are defaults, no need to save
   const toSave = {};
   PERSONAL_FIELDS.forEach(k => { toSave[k] = params[k]; });
   try {
@@ -455,9 +480,8 @@ function EntryPage({ onSubmit, savedValues, onClearData }) {
   const handleSubmit = async () => {
     const errs = validate();
     if (Object.keys(errs).length > 0) { setErrors(errs); return; }
-    // Coerce all numeric fields to numbers before saving
-    const coerced = { ...form };
-    REQUIRED_NUMERIC.forEach(({k}) => { coerced[k] = Number(coerced[k]); });
+    // Sanitize all numeric fields (personal + strategy + stocks array)
+    const coerced = sanitizeParams({ ...form });
     saveParams(coerced);
     setHasSaved(true);
     onSubmit(coerced);
